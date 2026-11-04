@@ -1,3 +1,4 @@
+import { processBooking } from './bookingService';
 import React, { useState, useEffect } from 'react';
 
 // --- ESTADOS Y DATOS DE DEMOSTRACIÓN ---
@@ -150,23 +151,28 @@ export default function App() {
   };
 
   const handleConfirmSeats = () => {
-    if (selectedSeats.length === 0) return alert('Por favor selecciona al menos un asiento.');
+    if (selectedSeats.length === 0) return alert('Por favor selecciona al menos un asiento');
     setBookingStep('payment');
   };
 
-  const handleProcessPayment = (method) => {
-    const ticketCode = 'ZG-' + Math.floor(100000 + Math.random() * 900000);
-    const newTicket = {
-      codigoReserva: ticketCode,
-      viaje: selectedTrip,
-      asientos: selectedSeats,
-      pasajeroNombre: 'Juan Carlos Pérez',
-      pasajeroDNI: '74839201',
-      total: selectedTrip.precio * selectedSeats.length,
-      metodoPago: method,
-      estadoPago: 'PAGADO',
-      fechaEmision: new Date().toLocaleString()
-    };
+  const handleProcessPayment = async (method) => {
+    if (!selectedTrip || selectedSeats.length === 0) return;
+
+    try {
+      await processBooking({
+        tripId: selectedTrip.id || 'TRP-101',
+        seatNumber: selectedSeats.join(', '),
+        passengerName: 'Pasajero Zego',
+        passengerDni: '74839201',
+        passengerPhone: '987654321',
+        routeName: `${selectedTrip.origen} ➔ ${selectedTrip.destino}`,
+        departureTime: selectedTrip.fechaSalida,
+        price: selectedTrip.precio * selectedSeats.length
+      });
+    } catch (error) {
+      console.error('Error al procesar reserva:', error);
+    }
+  };
     
     // Actualizar asientos ocupados en el viaje
     setTrips(trips.map(t => {
