@@ -1,5 +1,5 @@
 // src/services/bookingService.js
-import { supabase } from '../supabaseClient';
+import { supabase } from './supabaseClient';
 
 const ZEGO_WHATSAPP_NUMBER = '51999999999'; // Reemplaza con tu número de teléfono corporativo
 
