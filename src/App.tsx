@@ -150,45 +150,26 @@ export default function App() {
     }
   };
 
-  const handleConfirmSeats = () => {
-    if (selectedSeats.length === 0) return alert('Por favor selecciona al menos un asiento');
-    setBookingStep('payment');
-  };
-
-  const handleProcessPayment = async (method) => {
-    if (!selectedTrip || selectedSeats.length === 0) return;
+  const handleConfirmSeats = async () => {
+    if (selectedSeats.length === 0) {
+      return alert('Por favor selecciona al menos un asiento');
+    }
 
     try {
       await processBooking({
-        tripId: selectedTrip.id || 'TRP-101',
+        tripId: selectedTrip?.id || 'TRP-101',
         seatNumber: selectedSeats.join(', '),
         passengerName: 'Pasajero Zego',
         passengerDni: '74839201',
         passengerPhone: '987654321',
-        routeName: `${selectedTrip.origen} ➔ ${selectedTrip.destino}`,
-        departureTime: selectedTrip.fechaSalida,
-        price: selectedTrip.precio * selectedSeats.length
+        routeName: 'Lima ➔ Huánuco',
+        departureTime: selectedTrip?.fechaSalida || '2026-03-25 07:30',
+        price: (selectedTrip?.precio || 75) * selectedSeats.length
       });
     } catch (error) {
       console.error('Error al procesar reserva:', error);
     }
   };
-    
-    // Actualizar asientos ocupados en el viaje
-    setTrips(trips.map(t => {
-      if (t.id === selectedTrip.id) {
-        return {
-          ...t,
-          asientosOcupados: [...t.asientosOcupados, ...selectedSeats]
-        };
-      }
-      return t;
-    }));
-
-    setActiveTicket(newTicket);
-    setBookingStep('ticket');
-  };
-
   return (
     <div className="min-h-screen bg-[#071426] text-white font-sans flex flex-col">
       {/* --- BARRA DE NAVEGACIÓN PRINCIPAL --- */}
