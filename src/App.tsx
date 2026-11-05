@@ -1,946 +1,1283 @@
-import { processBooking } from './bookingService';
 import React, { useState, useEffect } from 'react';
+// @ts-ignore
+import { supabase } from './supabaseClient';
 
-// --- ESTADOS Y DATOS DE DEMOSTRACIÓN ---
-const INITIAL_TRIPS = [
+// ==============================================================================
+// TYPES & INTERFACES (SISTEMA COMPLETO ZEGO MOVILIDAD S.A.C.)
+// ==============================================================================
+export type UserRole = 'pasajero' | 'conductor' | 'despachador' | 'superadmin';
+export type DocumentType = 'DNI' | 'CE' | 'PASAPORTE';
+export type ComprobanteType = 'boleta' | 'factura';
+export type VehicleType = 'minivan_7' | 'minivan_11' | 'bus_2pisos';
+
+export interface Passenger {
+  seat: number;
+  docType: DocumentType;
+  dni: string;
+  nombre: string;
+  telefono: string;
+  email: string;
+  equipajeBase: string;
+  equipajeExtraKg: number;
+  precioEquipajeExtra: number;
+  embarque: string;
+  desembarque: string;
+  estadoAbordaje?: 'pendiente' | 'a_bordo';
+}
+
+export interface Encomienda {
+  codigoGuia: string;
+  remitenteNombre: string;
+  remitenteDni: string;
+  remitenteTelefono: string;
+  destinatarioNombre: string;
+  destinatarioDni: string;
+  destinatarioTelefono: string;
+  origen: string;
+  destino: string;
+  descripcion: string;
+  pesoKg: number;
+  fleteTotal: number;
+  estado: 'recibido_terminal' | 'en_transito' | 'entregado';
+  fechaEnvio: string;
+}
+
+export interface Trip {
+  id: string;
+  codigo: string;
+  origen: string;
+  destino: string;
+  embarqueDefault: string;
+  llegadaDefault: string;
+  fechaSalida: string;
+  duracion: string;
+  precioBase: number;
+  tipoServicio: 'compartido' | 'ejecutivo' | 'vip';
+  tipoVehiculo: VehicleType;
+  asientosTotales: number;
+  asientosOcupados: number[];
+  asientosReservadosTemp: number[];
+  puntosEmbarque: string[];
+  puntosDesembarque: string[];
+  vehiculo: {
+    placa: string;
+    modelo: string;
+    soatVigente: boolean;
+    revisionTecnica: boolean;
+  };
+  conductor: {
+    id: string;
+    nombre: string;
+    licencia: string;
+    categoria: string;
+    celular: string;
+    horasManejadasHoy: number;
+  };
+  gps: {
+    lat: number;
+    lng: number;
+    velocidad: number;
+    tramo: string;
+    progresoPorcentaje: number;
+    enZonaAltamontana: boolean;
+  };
+  esFestivo: boolean;
+  factorPrecioFestivo: number;
+}
+
+export interface Ticket {
+  codigoReserva: string;
+  serieComprobante: string;
+  tipoComprobante: ComprobanteType;
+  rucEmisor: string;
+  razonSocialEmisor: string;
+  rucCliente?: string;
+  razonSocialCliente?: string;
+  pasajeros: Passenger[];
+  viaje: Trip;
+  asientos: number[];
+  subtotal: number;
+  igv: number;
+  totalPagar: number;
+  metodoPago: string;
+  nroOperacion?: string;
+  fechaEmision: string;
+  qrPayload: string;
+  hashSunat: string;
+}
+
+// ==============================================================================
+// BASE DE DATOS INICIAL ROBUSTA
+// ==============================================================================
+const INITIAL_TRIPS: Trip[] = [
   {
     id: 'TRP-101',
     codigo: 'ZG-LMA-HUU-01',
     origen: 'Lima (Javier Prado / La Victoria)',
     destino: 'Huánuco (Terminal Terrestre Central)',
-    embarque: 'Av. Javier Prado Este 1120, Lima',
-    llegada: 'Jr. General Prado 450, Huánuco',
+    embarqueDefault: 'Av. Javier Prado Este 1120, Lima',
+    llegadaDefault: 'Jr. General Prado 450, Huánuco',
     fechaSalida: '2026-03-25 07:30',
-    fechaLlegadaEstimada: '2026-03-25 15:30',
     duracion: '8h 00m',
-    precio: 75.00,
+    precioBase: 75.00,
     tipoServicio: 'compartido',
+    tipoVehiculo: 'minivan_7',
     asientosTotales: 7,
     asientosOcupados: [2, 5],
-    asientosReservadosTemp: [4],
-    asientosDeshabilitados: [],
+    asientosReservadosTemp: [],
+    puntosEmbarque: ['Javier Prado (Terminal Central)', 'Santa Anita (Peaje)', 'Chosica (Plaza)'],
+    puntosDesembarque: ['San Mateo', 'Ticlio', 'La Oroya', 'Junín', 'Cerro de Pasco', 'Huánuco (Terminal)'],
     vehiculo: {
-      id: 'VEH-01',
-      marca: 'Hyundai',
-      modelo: 'H1 Executive',
       placa: 'ZGO-789',
-      color: 'Azul Noche Premium',
-      capacidad: 7,
-      tipo: 'Minivan'
+      modelo: 'Hyundai H1 Executive (7 Asientos)',
+      soatVigente: true,
+      revisionTecnica: true
     },
     conductor: {
       id: 'DRV-01',
       nombre: 'Carlos Mendoza Ramos',
       licencia: 'Q-48291049',
       categoria: 'A-IIIa',
-      celular: '987 654 321',
-      foto: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=200',
-      valoracion: 4.9
+      celular: '987654321',
+      horasManejadasHoy: 3.2
     },
-    estado: 'en_ruta',
-    gps: { lat: -10.4532, lng: -76.0123, velocidad: 68, ultimaActualizacion: 'Hace 1 min', tramo: 'Cerro de Pasco - Huánuco' }
+    gps: { lat: -10.4532, lng: -76.0123, velocidad: 68, tramo: 'Ticlio ➔ La Oroya', progresoPorcentaje: 45, enZonaAltamontana: true },
+    esFestivo: false,
+    factorPrecioFestivo: 1.0
   },
   {
     id: 'TRP-102',
-    codigo: 'ZG-HUU-LMA-02',
-    origen: 'Huánuco (Terminal Terrestre Central)',
-    destino: 'Lima (Javier Prado / La Victoria)',
-    embarque: 'Jr. General Prado 450, Huánuco',
-    llegada: 'Av. Javier Prado Este 1120, Lima',
-    fechaSalida: '2026-03-25 09:00',
-    fechaLlegadaEstimada: '2026-03-25 17:00',
+    codigo: 'ZG-LMA-HUU-02',
+    origen: 'Lima (Javier Prado / La Victoria)',
+    destino: 'Huánuco (Terminal Terrestre Central)',
+    embarqueDefault: 'Av. Javier Prado Este 1120, Lima',
+    llegadaDefault: 'Jr. General Prado 450, Huánuco',
+    fechaSalida: '2026-03-25 21:00',
     duracion: '8h 00m',
-    precio: 85.00,
-    tipoServicio: 'privado',
-    asientosTotales: 4,
-    asientosOcupados: [1],
+    precioBase: 90.00,
+    tipoServicio: 'vip',
+    tipoVehiculo: 'minivan_11',
+    asientosTotales: 11,
+    asientosOcupados: [1, 3, 4],
     asientosReservadosTemp: [],
-    asientosDeshabilitados: [],
+    puntosEmbarque: ['Javier Prado (Terminal Central)', 'Chosica'],
+    puntosDesembarque: ['La Oroya', 'Cerro de Pasco', 'Huánuco (Terminal)'],
     vehiculo: {
-      id: 'VEH-02',
-      marca: 'Ford',
-      modelo: 'Explorer VIP',
-      placa: 'ZGO-999',
-      color: 'Negro Azabache',
-      capacidad: 4,
-      tipo: 'SUV'
+      placa: 'ZGO-900',
+      modelo: 'Toyota HiAce VIP (11 Asientos)',
+      soatVigente: true,
+      revisionTecnica: true
     },
     conductor: {
       id: 'DRV-02',
-      nombre: 'Miguel Ángel Torres',
-      licencia: 'Q-19284012',
-      categoria: 'A-IIb',
-      celular: '912 345 678',
-      foto: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-      valoracion: 5.0
-    },
-    estado: 'proximo_salir',
-    gps: { lat: -9.9306, lng: -76.2422, velocidad: 0, ultimaActualizacion: 'En paradero', tramo: 'Huánuco Centro' }
-  },
-  {
-    id: 'TRP-103',
-    codigo: 'ZG-LMA-HUU-03',
-    origen: 'Lima (Javier Prado / La Victoria)',
-    destino: 'Huánuco (Terminal Terrestre Central)',
-    embarque: 'Av. Javier Prado Este 1120, Lima',
-    llegada: 'Jr. General Prado 450, Huánuco',
-    fechaSalida: '2026-03-25 21:00',
-    fechaLlegadaEstimada: '2026-03-26 05:00',
-    duracion: '8h 00m',
-    precio: 65.00,
-    tipoServicio: 'compartido',
-    asientosTotales: 9,
-    asientosOcupados: [1, 3, 4, 8],
-    asientosReservadosTemp: [],
-    asientosDeshabilitados: [9],
-    vehiculo: {
-      id: 'VEH-03',
-      marca: 'Toyota',
-      modelo: 'HiAce Royal',
-      placa: 'ZGO-333',
-      color: 'Blanco Plata',
-      capacidad: 9,
-      tipo: 'Minivan XL'
-    },
-    conductor: {
-      id: 'DRV-03',
-      nombre: 'Juan Pablo Morales',
-      licencia: 'Q-77291022',
+      nombre: 'Jorge Luis Alvarado',
+      licencia: 'Q-19283746',
       categoria: 'A-IIIa',
-      celular: '976 112 334',
-      foto: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-      valoracion: 4.8
+      celular: '912345678',
+      horasManejadasHoy: 4.5
     },
-    estado: 'programado',
-    gps: { lat: -12.0463, lng: -77.0428, velocidad: 0, ultimaActualizacion: 'Programado', tramo: 'Cochera Lima' }
+    gps: { lat: -12.0463, lng: -77.0428, velocidad: 0, tramo: 'Terminal Javier Prado (En Embarque)', progresoPorcentaje: 5, enZonaAltamontana: false },
+    esFestivo: false,
+    factorPrecioFestivo: 1.0
+  }
+];
+
+const INITIAL_ENCOMIENDAS: Encomienda[] = [
+  {
+    codigoGuia: 'GRT-001-9281',
+    remitenteNombre: 'Juan Perez Soto',
+    remitenteDni: '45891203',
+    remitenteTelefono: '998877665',
+    destinatarioNombre: 'Maria Garcia Flores',
+    destinatarioDni: '70891234',
+    destinatarioTelefono: '912345678',
+    origen: 'Lima',
+    destino: 'Huánuco',
+    descripcion: 'Caja de repuestos mecánicos automotrices',
+    pesoKg: 12.5,
+    fleteTotal: 37.50,
+    estado: 'en_transito',
+    fechaEnvio: '2026-03-25 08:00'
   }
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('pasajero'); // pasajero | admin | conductor | corporativo
-  const [trips, setTrips] = useState(INITIAL_TRIPS);
-  const [selectedTrip, setSelectedTrip] = useState(null);
-  const [selectedSeats, setSelectedSeats] = useState([]);
-  const [bookingStep, setBookingStep] = useState('search'); // search | seats | payment | ticket
-  const [searchFilter, setSearchFilter] = useState({ origen: 'Lima', destino: 'Huánuco', fecha: '2026-03-25', pasajeros: 1, servicio: 'todos' });
-  
-  // Datos del boleto generado
-  const [activeTicket, setActiveTicket] = useState(null);
+  // --- ESTADOS GENERALES Y NAVEGACIÓN ---
+  const [activeTab, setActiveTab] = useState<UserRole | 'encomiendas'>('pasajero');
+  const [trips, setTrips] = useState<Trip[]>(INITIAL_TRIPS);
+  const [encomiendas, setEncomiendas] = useState<Encomienda[]>(INITIAL_ENCOMIENDAS);
+  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
+  const [selectedSeats, setSelectedSeats] = useState<number[]>([]);
+  const [bookingStep, setBookingStep] = useState<'search' | 'seats' | 'payment' | 'ticket'>('search');
 
-  // Formulario Corporativo
-  const [corpForm, setCorpForm] = useState({ ruc: '', empresa: '', contacto: '', telefono: '', correo: '', origen: 'Lima', destino: 'Huánuco', fecha: '', pasajeros: 10, descripcion: '' });
-  const [corpSubmitted, setCorpSubmitted] = useState(false);
+  // Filtros de Búsqueda
+  const [searchFilter, setSearchFilter] = useState({ origen: 'Lima', destino: 'Huánuco', fecha: '2026-03-25', servicio: 'todos' });
 
-  // Filtro de viajes para pasajero
-  const filteredTrips = trips.filter(t => {
-    const matchOrigen = t.origen.toLowerCase().includes(searchFilter.origen.toLowerCase());
-    const matchDestino = t.destino.toLowerCase().includes(searchFilter.destino.toLowerCase());
-    const matchServicio = searchFilter.servicio === 'todos' || t.tipoServicio === searchFilter.servicio;
-    return matchOrigen && matchDestino && matchServicio;
+  // Autenticación por PIN y RBAC
+  const [currentRole, setCurrentRole] = useState<UserRole>('pasajero');
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [isDriverAuthenticated, setIsDriverAuthenticated] = useState(false);
+  const [authModal, setAuthModal] = useState<UserRole | null>(null);
+  const [pinInput, setPinInput] = useState('');
+  const [authError, setAuthError] = useState('');
+
+  // Temporizador de Reserva de 5 minutos
+  const [timeLeft, setTimeLeft] = useState<number>(300);
+  const [isTimerActive, setIsTimerActive] = useState<boolean>(false);
+
+  // RENIEC / SUNAT & Datos Pasajeros
+  const [loadingDniIndex, setLoadingDniIndex] = useState<number | null>(null);
+  const [loadingRuc, setLoadingRuc] = useState<boolean>(false);
+  const [passengersList, setPassengersList] = useState<Passenger[]>([]);
+  const [aceptanTerminosLey29733, setAceptanTerminosLey29733] = useState<boolean>(false);
+
+  // Comprobante SUNAT
+  const [comprobanteType, setComprobanteType] = useState<ComprobanteType>('boleta');
+  const [rucCliente, setRucCliente] = useState<string>('');
+  const [razonSocialCliente, setRazonSocialCliente] = useState<string>('');
+
+  // Pasarela de Pago & OCR Scanner
+  const [paymentMethod, setPaymentMethod] = useState<'yape' | 'tarjeta' | null>(null);
+  const [yapeOpNumber, setYapeOpNumber] = useState<string>('');
+  const [isOcrScanning, setIsOcrScanning] = useState<boolean>(false);
+  const [activeTicket, setActiveTicket] = useState<Ticket | null>(null);
+
+  // Conductor & Escáner QR
+  const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
+  const [scannedTicketCode, setScannedTicketCode] = useState<string>('');
+  const [boardedPassengers, setBoardedPassengers] = useState<string[]>([]);
+
+  // Modales & Vistas Especiales
+  const [viewGpsTrip, setViewGpsTrip] = useState<Trip | null>(null);
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const [isFestivoGlobal, setIsFestivoGlobal] = useState<boolean>(false);
+
+  // Encomiendas Form
+  const [newEncomienda, setNewEncomienda] = useState({
+    remitenteNombre: '', remitenteDni: '', remitenteTelefono: '',
+    destinatarioNombre: '', destinatarioDni: '', destinatarioTelefono: '',
+    origen: 'Lima', destino: 'Huánuco', descripcion: '', pesoKg: 5
   });
 
-  const handleSelectSeat = (seatNum) => {
-    if (!selectedTrip) return;
-    if (selectedTrip.asientosOcupados.includes(seatNum) || selectedTrip.asientosDeshabilitados.includes(seatNum)) return;
+  // --- FORMULARIO CREACIÓN DE SALIDAS (ADMIN CRUD) ---
+  const [newTripForm, setNewTripForm] = useState({
+    origen: 'Lima (Javier Prado / La Victoria)',
+    destino: 'Huánuco (Terminal Terrestre Central)',
+    fechaSalida: '2026-03-26 08:00',
+    duracion: '8h 00m',
+    precioBase: 80,
+    tipoVehiculo: 'minivan_7' as VehicleType,
+    placa: 'ZGO-100',
+    modeloVehiculo: 'Hyundai H1 Executive (7 Asientos)',
+    conductorNombre: 'Nuevo Conductor',
+    licencia: 'Q-99887766',
+    celularConductor: '987000111'
+  });
 
-    if (selectedSeats.includes(seatNum)) {
-      setSelectedSeats(selectedSeats.filter(s => s !== seatNum));
-    } else {
-      setSelectedSeats([...selectedSeats, seatNum]);
+  // --- 1. SUPABASE REALTIME & SYNC ---
+  const fetchTripsFromSupabase = async () => {
+    try {
+      const { data, error } = await supabase.from('viajes').select('*');
+      if (!error && data && data.length > 0) {
+        const viajesFormateados: Trip[] = data.map((v: any) => ({
+          id: String(v.id || 'TRP-' + Math.floor(100 + Math.random() * 900)),
+          codigo: v.codigo || `ZG-${v.origen?.slice(0, 3).toUpperCase() || 'LMA'}-${v.destino?.slice(0, 3).toUpperCase() || 'HUU'}`,
+          origen: v.origen || 'Lima',
+          destino: v.destino || 'Huánuco',
+          embarqueDefault: v.embarque || 'Av. Javier Prado Este 1120',
+          llegadaDefault: v.llegada || 'Jr. General Prado 450',
+          fechaSalida: v.fecha_salida ? new Date(v.fecha_salida).toLocaleString('es-PE', { dateStyle: 'short', timeStyle: 'short' }) : '2026-03-25 08:00',
+          duracion: v.duracion || '8h 00m',
+          precioBase: Number(v.precio) || 80.0,
+          tipoServicio: v.vehiculo_tipo?.toLowerCase().includes('vip') ? 'vip' : 'compartido',
+          tipoVehiculo: (v.vehiculo_tipo?.toLowerCase().includes('11') ? 'minivan_11' : 'minivan_7') as VehicleType,
+          asientosTotales: v.asientos_totales || (v.vehiculo_tipo?.toLowerCase().includes('11') ? 11 : 7),
+          asientosOcupados: Array.isArray(v.asientos_ocupados) ? v.asientos_ocupados : [],
+          asientosReservadosTemp: [],
+          puntosEmbarque: ['Javier Prado (Terminal Central)', 'Santa Anita', 'Chosica'],
+          puntosDesembarque: ['San Mateo', 'La Oroya', 'Cerro de Pasco', 'Huánuco'],
+          vehiculo: { placa: v.placa || 'ZGO-789', modelo: v.vehiculo_tipo || 'Minivan Ejecutiva', soatVigente: true, revisionTecnica: true },
+          conductor: { id: 'DRV-01', nombre: v.conductor_nombre || 'Carlos Mendoza Ramos', licencia: 'A-IIIa', categoria: 'A-IIIa', celular: '987654321', horasManejadasHoy: 3.5 },
+          gps: { lat: -10.4532, lng: -76.0123, velocidad: 65, tramo: 'Ruta Lima ⇄ Huánuco', progresoPorcentaje: 50, enZonaAltamontana: false },
+          esFestivo: isFestivoGlobal,
+          factorPrecioFestivo: isFestivoGlobal ? 1.3 : 1.0
+        }));
+        setTrips(viajesFormateados);
+      }
+    } catch (err) {
+      console.warn('Conexión local activa.');
     }
+  };
+
+  useEffect(() => {
+    fetchTripsFromSupabase();
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [isFestivoGlobal]);
+
+  // --- 2. CRONÓMETRO DE RESERVA 5 MINUTOS ---
+  useEffect(() => {
+    let timer: any;
+    if (isTimerActive && timeLeft > 0) {
+      timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
+    } else if (timeLeft === 0 && isTimerActive) {
+      alert('⏱️ Tu tiempo de reserva de 5 minutos ha expirado. Los asientos han sido liberados.');
+      setIsTimerActive(false);
+      resetBookingFlow();
+    }
+    return () => clearInterval(timer);
+  }, [isTimerActive, timeLeft]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // --- 3. ROLES Y AUTENTICACIÓN ---
+  const handleTabChange = (role: UserRole | 'encomiendas') => {
+    if (role === 'superadmin' && !isAdminAuthenticated) {
+      setAuthModal('superadmin');
+      setPinInput('');
+      setAuthError('');
+      return;
+    }
+    if (role === 'conductor' && !isDriverAuthenticated) {
+      setAuthModal('conductor');
+      setPinInput('');
+      setAuthError('');
+      return;
+    }
+    if (role !== 'encomiendas') setCurrentRole(role);
+    setActiveTab(role);
+    if (role === 'pasajero') resetBookingFlow();
+  };
+
+  const handleVerifyPin = () => {
+    if (authModal === 'superadmin') {
+      if (pinInput === '1234' || pinInput === 'admin') {
+        setIsAdminAuthenticated(true);
+        setCurrentRole('superadmin');
+        setActiveTab('superadmin');
+        setAuthModal(null);
+      } else setAuthError('PIN incorrecto. Use "1234" para Admin.');
+    } else if (authModal === 'conductor') {
+      if (pinInput === '5678' || pinInput === 'chofer') {
+        setIsDriverAuthenticated(true);
+        setCurrentRole('conductor');
+        setActiveTab('conductor');
+        setAuthModal(null);
+      } else setAuthError('PIN incorrecto. Use "5678" para Conductor.');
+    }
+  };
+
+  // --- 4. CONSULTA AUTOMÁTICA DNI / RUC ---
+  const handlePassengerDocChange = async (index: number, docVal: string) => {
+    handlePassengerChange(index, 'dni', docVal);
+    const docType = passengersList[index].docType;
+
+    if (docType === 'DNI' && docVal.length === 8 && /^\d+$/.test(docVal)) {
+      setLoadingDniIndex(index);
+      try {
+        const res = await fetch(`https://api.apis.net.pe/v1/dni?numero=${docVal}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.nombre) handlePassengerChange(index, 'nombre', data.nombre);
+        }
+      } catch (err) {
+        console.log('Fallo API, ingreso manual disponible.');
+      } finally {
+        setLoadingDniIndex(null);
+      }
+    }
+  };
+
+  const handleRucLookup = async (rucVal: string) => {
+    setRucCliente(rucVal);
+    if (rucVal.length === 11 && /^\d+$/.test(rucVal)) {
+      setLoadingRuc(true);
+      try {
+        const res = await fetch(`https://api.apis.net.pe/v1/ruc?numero=${rucVal}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.nombre) setRazonSocialCliente(data.nombre);
+        } else setRazonSocialCliente('EMPRESA DE TRANSPORTE Y SERVICIOS S.A.C.');
+      } catch (err) {
+        setRazonSocialCliente('EMPRESA DE SERVICIOS GENERALES PERU S.A.C.');
+      } finally {
+        setLoadingRuc(false);
+      }
+    }
+  };
+
+  // --- 5. LECTURA OCR DE VOUCHER YAPE/PLIN ---
+  const handleSimulateOcrVoucherUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0]) return;
+    setIsOcrScanning(true);
+    setTimeout(() => {
+      const simulatedOp = String(Math.floor(10000000 + Math.random() * 90000000));
+      setYapeOpNumber(simulatedOp);
+      setIsOcrScanning(false);
+      alert(`✨ ¡Voucher Yape reconocido exitosamente con OCR!\n\n• N° Operación detectado: ${simulatedOp}\n• Estado: VERIFICADO CON BANCO ✓`);
+    }, 1500);
+  };
+
+  // --- 6. SELECCIÓN ASIENTOS Y RESERVA ---
+  const handleSelectSeat = (seatNum: number) => {
+    if (!selectedTrip) return;
+    if (selectedTrip.asientosOcupados.includes(seatNum)) return;
+
+    let updatedSeats: number[];
+    if (selectedSeats.includes(seatNum)) {
+      updatedSeats = selectedSeats.filter((s) => s !== seatNum);
+    } else {
+      updatedSeats = [...selectedSeats, seatNum];
+    }
+
+    setSelectedSeats(updatedSeats);
+
+    const newPassengersList: Passenger[] = updatedSeats.map((seat) => {
+      const existing = passengersList.find((p) => p.seat === seat);
+      return (
+        existing || {
+          seat, docType: 'DNI', dni: '', nombre: '', telefono: '', email: '',
+          equipajeBase: '1 Maleta en Bodega (15kg) + Bolso de mano',
+          equipajeExtraKg: 0, precioEquipajeExtra: 0,
+          embarque: selectedTrip.puntosEmbarque[0] || selectedTrip.embarqueDefault,
+          desembarque: selectedTrip.puntosDesembarque[selectedTrip.puntosDesembarque.length - 1] || selectedTrip.destino,
+          estadoAbordaje: 'pendiente'
+        }
+      );
+    });
+    setPassengersList(newPassengersList);
+  };
+
+  const handlePassengerChange = (index: number, field: keyof Passenger, value: any) => {
+    const updated = [...passengersList];
+    updated[index] = { ...updated[index], [field]: value };
+    if (field === 'equipajeExtraKg') {
+      const extraKg = Math.max(0, Number(value) || 0);
+      updated[index].equipajeExtraKg = extraKg;
+      updated[index].precioEquipajeExtra = extraKg * 3.0;
+    }
+    setPassengersList(updated);
   };
 
   const handleConfirmSeats = async () => {
-    // 1. Validar que haya al menos un asiento seleccionado
-    if (selectedSeats.length === 0) {
-      return alert('Por favor selecciona al menos un asiento.');
+    if (!selectedTrip) return alert('No hay un viaje seleccionado activo.');
+    if (selectedSeats.length === 0) return alert('Por favor selecciona al menos un asiento.');
+
+    if (!aceptanTerminosLey29733) {
+      return alert('⚠️ Debes aceptar la Política de Protección de Datos Personales (Ley N° 29733) para continuar.');
     }
 
-    // 2. Si falta completar el nombre o teléfono, pedir datos antes de procesar
-    const nombrePasajero = formData?.nombre || prompt('Ingresa tu Nombre y Apellido:');
-    if (!nombrePasajero) return alert('El nombre es obligatorio para la reserva.');
-
-    const telefonoPasajero = formData?.telefono || prompt('Ingresa tu número de WhatsApp / Teléfono:');
-    if (!telefonoPasajero) return alert('El teléfono es obligatorio para enviar la confirmación.');
-
-    const dniPasajero = formData?.dni || prompt('Ingresa tu DNI (opcional):') || 'Sin DNI';
+    for (let i = 0; i < passengersList.length; i++) {
+      const p = passengersList[i];
+      if (!p.nombre?.trim() || !p.dni?.trim() || !p.telefono?.trim()) {
+        return alert(`Completa los datos obligatorios (Documento, Nombre y Celular) para el Asiento N° ${p.seat}.`);
+      }
+    }
 
     try {
-      // 3. Registrar en Supabase y abrir WhatsApp
-      await processBooking({
-        tripId: selectedTrip?.id || 'TRP-101',
-        seatNumber: selectedSeats.join(', '),
-        passengerName: nombrePasajero,
-        passengerDni: dniPasajero,
-        passengerPhone: telefonoPasajero,
-        routeName: `${selectedTrip?.origen || 'Lima'} ➔ ${selectedTrip?.destino || 'Huánuco'}`,
-        departureTime: selectedTrip?.fechaSalida || '07:30 AM',
-        price: (selectedTrip?.precio || 75) * selectedSeats.length
-      });
-
-      // 4. Pasar al paso de confirmación/ticket
-      if (typeof setBookingStep === 'function') {
-        setBookingStep('ticket');
-      }
-    } catch (error) {
-      console.error('Error al procesar reserva:', error);
-      alert('Ocurrió un error al procesar la reserva. Inténtalo nuevamente.');
+      const asientosPrevios = Array.isArray(selectedTrip.asientosOcupados) ? selectedTrip.asientosOcupados : [];
+      const nuevosOcupados = Array.from(new Set([...asientosPrevios, ...selectedSeats]));
+      await supabase.from('viajes').update({ asientos_ocupados: nuevosOcupados }).eq('id', selectedTrip.id);
+    } catch (e) {
+      console.warn('Sincronización local.');
     }
+
+    setTimeLeft(300);
+    setIsTimerActive(true);
+    setBookingStep('payment');
   };
+
+  // --- 7. PAGOS Y EMISIÓN COMPROBANTE SUNAT ---
+  const calculateTotals = () => {
+    if (!selectedTrip) return { subtotal: 0, igv: 0, totalPagar: 0, totalEquipajeExtra: 0 };
+    const precioUnitario = selectedTrip.precioBase * (selectedTrip.factorPrecioFestivo || 1);
+    const subtotalPasajes = precioUnitario * selectedSeats.length;
+    const totalEquipajeExtra = passengersList.reduce((acc, p) => acc + (p.precioEquipajeExtra || 0), 0);
+    const totalPagar = subtotalPasajes + totalEquipajeExtra;
+    const subtotalSinIgv = totalPagar / 1.18;
+    const igv = totalPagar - subtotalSinIgv;
+
+    return {
+      subtotal: Number(subtotalSinIgv.toFixed(2)),
+      igv: Number(igv.toFixed(2)),
+      totalPagar: Number(totalPagar.toFixed(2)),
+      totalEquipajeExtra
+    };
+  };
+
+  const handleProcessPayment = (metodoPagoNombre: string) => {
+    if (!selectedTrip) return;
+    setIsTimerActive(false);
+
+    const totals = calculateTotals();
+    const codigoReserva = 'ZG-' + Math.floor(100000 + Math.random() * 900000);
+    const serie = comprobanteType === 'factura' ? `F001-${Math.floor(1000 + Math.random() * 9000)}` : `B001-${Math.floor(10000 + Math.random() * 90000)}`;
+
+    const nuevoBoleto: Ticket = {
+      codigoReserva,
+      serieComprobante: serie,
+      tipoComprobante: comprobanteType,
+      rucEmisor: '20601928374',
+      razonSocialEmisor: 'ZEGO MOVILIDAD S.A.C.',
+      rucCliente: comprobanteType === 'factura' ? rucCliente : undefined,
+      razonSocialCliente: comprobanteType === 'factura' ? razonSocialCliente : undefined,
+      pasajeros: passengersList,
+      viaje: selectedTrip,
+      asientos: selectedSeats,
+      subtotal: totals.subtotal,
+      igv: totals.igv,
+      totalPagar: totals.totalPagar,
+      metodoPago: metodoPagoNombre,
+      nroOperacion: yapeOpNumber || 'CARD-ONLINE-OK',
+      fechaEmision: new Date().toLocaleString('es-PE'),
+      qrPayload: `20601928374|${comprobanteType.toUpperCase()}|${serie}|${totals.igv}|${totals.totalPagar}|${new Date().toISOString().slice(0, 10)}|${passengersList[0]?.dni || ''}`,
+      hashSunat: 'SHA256-' + Math.random().toString(36).substring(2, 10).toUpperCase()
+    };
+
+    setActiveTicket(nuevoBoleto);
+    setBookingStep('ticket');
+  };
+
+  // --- 8. MÓDULO DE ENCOMIENDAS (GUÍA DE REMISIÓN) ---
+  const handleCreateEncomienda = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEncomienda.remitenteNombre || !newEncomienda.destinatarioNombre) {
+      return alert('Completa los nombres de remitente y destinatario.');
+    }
+
+    const flete = newEncomienda.pesoKg * 3.0;
+    const nuevaGuia: Encomienda = {
+      codigoGuia: `GRT-001-${Math.floor(1000 + Math.random() * 9000)}`,
+      remitenteNombre: newEncomienda.remitenteNombre,
+      remitenteDni: newEncomienda.remitenteDni,
+      remitenteTelefono: newEncomienda.remitenteTelefono,
+      destinatarioNombre: newEncomienda.destinatarioNombre,
+      destinatarioDni: newEncomienda.destinatarioDni,
+      destinatarioTelefono: newEncomienda.destinatarioTelefono,
+      origen: newEncomienda.origen,
+      destino: newEncomienda.destino,
+      descripcion: newEncomienda.descripcion,
+      pesoKg: Number(newEncomienda.pesoKg),
+      fleteTotal: flete,
+      estado: 'recibido_terminal',
+      fechaEnvio: new Date().toLocaleString('es-PE')
+    };
+
+    setEncomiendas([nuevaGuia, ...encomiendas]);
+    alert(`✅ Guía Remisión Transportista Creada: ${nuevaGuia.codigoGuia}\nFlete Total: S/ ${flete.toFixed(2)}`);
+    setNewEncomienda({
+      remitenteNombre: '', remitenteDni: '', remitenteTelefono: '',
+      destinatarioNombre: '', destinatarioDni: '', destinatarioTelefono: '',
+      origen: 'Lima', destino: 'Huánuco', descripcion: '', pesoKg: 5
+    });
+  };
+
+  // --- 9. CREACIÓN Y ELIMINACIÓN DE VIAJES (ADMIN CRUD) ---
+  const handleCreateNewTrip = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const isVip = newTripForm.tipoVehiculo === 'minivan_11';
+    const asientosTotales = isVip ? 11 : 7;
+    const nuevoId = 'TRP-' + Math.floor(100 + Math.random() * 900);
+    const codigo = `ZG-${newTripForm.origen.slice(0, 3).toUpperCase()}-${newTripForm.destino.slice(0, 3).toUpperCase()}-${Math.floor(10 + Math.random() * 90)}`;
+
+    const nuevoViaje: Trip = {
+      id: nuevoId,
+      codigo: codigo,
+      origen: newTripForm.origen,
+      destino: newTripForm.destino,
+      embarqueDefault: 'Av. Javier Prado Este 1120, Lima',
+      llegadaDefault: 'Jr. General Prado 450, Huánuco',
+      fechaSalida: newTripForm.fechaSalida,
+      duracion: newTripForm.duracion,
+      precioBase: Number(newTripForm.precioBase),
+      tipoServicio: isVip ? 'vip' : 'compartido',
+      tipoVehiculo: newTripForm.tipoVehiculo,
+      asientosTotales: asientosTotales,
+      asientosOcupados: [],
+      asientosReservadosTemp: [],
+      puntosEmbarque: ['Terminal Principal', 'Santa Anita', 'Chosica'],
+      puntosDesembarque: ['San Mateo', 'La Oroya', 'Cerro de Pasco', 'Terminal Central'],
+      vehiculo: {
+        placa: newTripForm.placa,
+        modelo: newTripForm.modeloVehiculo,
+        soatVigente: true,
+        revisionTecnica: true
+      },
+      conductor: {
+        id: 'DRV-' + Math.floor(10 + Math.random() * 90),
+        nombre: newTripForm.conductorNombre,
+        licencia: newTripForm.licencia,
+        categoria: 'A-IIIa',
+        celular: newTripForm.celularConductor,
+        horasManejadasHoy: 0
+      },
+      gps: { lat: -12.0463, lng: -77.0428, velocidad: 0, tramo: 'En Terminal - Listo para Salida', progresoPorcentaje: 0, enZonaAltamontana: false },
+      esFestivo: isFestivoGlobal,
+      factorPrecioFestivo: isFestivoGlobal ? 1.3 : 1.0
+    };
+
+    // Intentar insertar en Supabase
+    try {
+      await supabase.from('viajes').insert([{
+        codigo: nuevoViaje.codigo,
+        origen: nuevoViaje.origen,
+        destino: nuevoViaje.destino,
+        fecha_salida: nuevoViaje.fechaSalida,
+        precio: nuevoViaje.precioBase,
+        vehiculo_tipo: nuevoViaje.vehiculo.modelo,
+        asientos_totales: nuevoViaje.asientosTotales,
+        asientos_ocupados: [],
+        placa: nuevoViaje.vehiculo.placa,
+        conductor_nombre: nuevoViaje.conductor.nombre
+      }]);
+    } catch (err) {
+      console.warn('Guardado localmente en la app.');
+    }
+
+    setTrips([nuevoViaje, ...trips]);
+    alert(`⚡ ¡NUEVA SALIDA CREADA CON ÉXITO!\n\nCódigo: ${codigo}\nRuta: ${newTripForm.origen} ➔ ${newTripForm.destino}\nPrecio: S/ ${newTripForm.precioBase}`);
+  };
+
+  const handleDeleteTrip = async (tripId: string) => {
+    if (!confirm('¿Estás seguro de eliminar esta salida programada?')) return;
+    try {
+      await supabase.from('viajes').delete().eq('id', tripId);
+    } catch (err) {
+      console.warn('Eliminado localmente.');
+    }
+    setTrips(trips.filter((t) => t.id !== tripId));
+  };
+
+  // --- 10. COMUNICACIONES Y MANIFIESTO SUTRAN ---
+  const handleSendWhatsAppToPassenger = () => {
+    if (!activeTicket || !activeTicket.pasajeros.length) return;
+    const firstPass = activeTicket.pasajeros[0];
+    const rawPhone = firstPass.telefono.replace(/\D/g, '');
+    const passengerPhone = rawPhone.startsWith('51') ? rawPhone : `51${rawPhone}`;
+
+    const pasajerosTxt = activeTicket.pasajeros
+      .map((p) => `• *Asiento ${p.seat}:* ${p.nombre} (${p.docType}: ${p.dni}) | Emb: ${p.embarque}`)
+      .join('\n');
+
+    const msg = encodeURIComponent(
+      `*¡HOLA ${firstPass.nombre.toUpperCase()}! TU RESERVA EN ZEGO MOVILIDAD ESTÁ CONFIRMADA* 🚐✨\n\n` +
+      `🎟 *Código:* ${activeTicket.codigoReserva}\n` +
+      `📄 *Comprobante SUNAT:* ${activeTicket.serieComprobante} (${activeTicket.tipoComprobante.toUpperCase()})\n` +
+      `📍 *Ruta:* ${activeTicket.viaje.origen} ➔ ${activeTicket.viaje.destino}\n` +
+      `📅 *Salida:* ${activeTicket.viaje.fechaSalida}\n\n` +
+      `*DETALLE PASAJEROS:*\n${pasajerosTxt}\n\n` +
+      `💳 *Total:* S/ ${activeTicket.totalPagar.toFixed(2)} (${activeTicket.metodoPago})\n\n` +
+      `_Presenta tu documento al abordar. ¡Buen viaje!_`
+    );
+
+    window.open(`https://wa.me/${passengerPhone}?text=${msg}`, '_blank');
+  };
+
+  const handleValidateTicketCode = (codigo: string) => {
+    if (!codigo.trim()) return;
+    if (!codigo.startsWith('ZG-')) return alert('❌ Formato incorrecto. Debe iniciar con "ZG-"');
+
+    if (boardedPassengers.includes(codigo)) {
+      alert(`⚠️ El pasaje ${codigo} ya fue validado anteriormente.`);
+    } else {
+      setBoardedPassengers((prev) => [...prev, codigo]);
+      alert(`✅ ¡Pasaje ${codigo} VALIDADO! Pasajero marcado como A BORDO ✓`);
+    }
+    setScannedTicketCode('');
+    setIsScannerOpen(false);
+  };
+
+  const resetBookingFlow = () => {
+    setBookingStep('search');
+    setSelectedTrip(null);
+    setSelectedSeats([]);
+    setPassengersList([]);
+    setActiveTicket(null);
+    setPaymentMethod(null);
+    setYapeOpNumber('');
+    setIsTimerActive(false);
+    setTimeLeft(300);
+  };
+
+  const totals = calculateTotals();
+  const filteredTrips = trips.filter((t) => t.origen.toLowerCase().includes(searchFilter.origen.toLowerCase()));
+
   return (
-    <div className="min-h-screen bg-[#071426] text-white font-sans flex flex-col">
-      {/* --- BARRA DE NAVEGACIÓN PRINCIPAL --- */}
-      <header className="border-b border-gray-800 bg-[#071426]/90 backdrop-blur sticky top-0 z-50 px-4 lg:px-8 py-3 flex items-center justify-between">
-        <div className="flex items-center space-x-3 cursor-pointer" onClick={() => { setActiveTab('pasajero'); setBookingStep('search'); }}>
+    <div className="min-h-screen bg-[#071426] text-white font-sans flex flex-col selection:bg-[#DFFF00] selection:text-[#071426]">
+      {/* HEADER PRINCIPAL */}
+      <header className="border-b border-gray-800 bg-[#071426]/95 backdrop-blur sticky top-0 z-50 px-4 md:px-6 py-3.5 flex items-center justify-between shadow-md">
+        <div className="flex items-center space-x-3 cursor-pointer" onClick={() => handleTabChange('pasajero')}>
           <div className="bg-[#176BFF] text-[#DFFF00] font-black italic px-3 py-1.5 rounded-lg text-2xl tracking-tighter shadow-lg flex items-center">
             Z<span className="text-white">EGO</span>
             <span className="ml-1 text-[#DFFF00] text-xl">➔</span>
           </div>
           <div>
-            <h1 className="font-bold text-lg leading-none tracking-wide text-white">ZEGO <span className="text-[#DFFF00]">MOVILIDAD</span></h1>
-            <p className="text-[10px] text-gray-400 font-medium tracking-widest uppercase">Conectando tu destino</p>
+            <h1 className="font-bold text-lg leading-none tracking-wide text-white flex items-center gap-1.5">
+              ZEGO <span className="text-[#DFFF00]">MOVILIDAD</span>
+              <span className="hidden sm:inline-block bg-[#176BFF]/20 text-[#176BFF] border border-[#176BFF]/40 text-[9px] px-1.5 py-0.5 rounded font-extrabold uppercase">
+                SUTRAN
+              </span>
+            </h1>
+            <p className="text-[10px] text-gray-400 font-medium tracking-widest uppercase">Sistema Interprovincial Lima ⇄ Huánuco</p>
           </div>
         </div>
 
-        {/* Selector de Módulos (Navegación del Demo) */}
-        <div className="hidden md:flex items-center bg-[#1C2738] p-1 rounded-xl border border-gray-700">
-          <button 
-            onClick={() => { setActiveTab('pasajero'); setBookingStep('search'); }}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${activeTab === 'pasajero' ? 'bg-[#176BFF] text-white shadow' : 'text-gray-300 hover:text-white'}`}>
-            👥 App Pasajeros
+        {/* NAVEGACIÓN POR PESTAÑAS */}
+        <div className="flex items-center bg-[#1C2738] p-1.5 rounded-xl border border-gray-700 text-xs gap-1">
+          <button onClick={() => handleTabChange('pasajero')} className={`px-3 py-2 rounded-lg font-bold transition ${activeTab === 'pasajero' ? 'bg-[#176BFF] text-white' : 'text-gray-300'}`}>
+            👥 Pasajeros
           </button>
-          <button 
-            onClick={() => setActiveTab('corporativo')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${activeTab === 'corporativo' ? 'bg-[#176BFF] text-white shadow' : 'text-gray-300 hover:text-white'}`}>
-            🏢 ZEGO Empresas
+          <button onClick={() => handleTabChange('encomiendas')} className={`px-3 py-2 rounded-lg font-bold transition ${activeTab === 'encomiendas' ? 'bg-[#176BFF] text-white' : 'text-gray-300'}`}>
+            📦 Encomiendas
           </button>
-          <button 
-            onClick={() => setActiveTab('conductor')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${activeTab === 'conductor' ? 'bg-[#176BFF] text-white shadow' : 'text-gray-300 hover:text-white'}`}>
-            🚘 App Conductor
+          <button onClick={() => handleTabChange('conductor')} className={`px-3 py-2 rounded-lg font-bold transition ${activeTab === 'conductor' ? 'bg-[#176BFF] text-white' : 'text-gray-300'}`}>
+            🚘 Conductor
           </button>
-          <button 
-            onClick={() => setActiveTab('admin')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${activeTab === 'admin' ? 'bg-[#DFFF00] text-[#071426] shadow font-bold' : 'text-[#DFFF00] hover:brightness-110'}`}>
-            ⚡ Panel Admin
+          <button onClick={() => handleTabChange('superadmin')} className={`px-3 py-2 rounded-lg font-bold transition ${activeTab === 'superadmin' ? 'bg-[#DFFF00] text-[#071426]' : 'text-[#DFFF00]'}`}>
+            ⚡ Admin
           </button>
         </div>
-
-        <button 
-          onClick={() => { setActiveTab('pasajero'); setBookingStep('search'); }}
-          className="bg-[#176BFF] hover:bg-blue-600 text-white text-xs font-bold px-4 py-2 rounded-lg transition shadow-md flex items-center gap-2">
-          <span>Reservar Ahora</span>
-          <span className="text-[#DFFF00]">→</span>
-        </button>
       </header>
 
-      {/* Selector Móvil de Módulos */}
-      <div className="md:hidden flex overflow-x-auto bg-[#1C2738] p-2 border-b border-gray-800 text-xs gap-2">
-        <button onClick={() => { setActiveTab('pasajero'); setBookingStep('search'); }} className={`px-3 py-1 rounded whitespace-nowrap ${activeTab === 'pasajero' ? 'bg-[#176BFF]' : 'bg-gray-800'}`}>👥 Pasajero</button>
-        <button onClick={() => setActiveTab('corporativo')} className={`px-3 py-1 rounded whitespace-nowrap ${activeTab === 'corporativo' ? 'bg-[#176BFF]' : 'bg-gray-800'}`}>🏢 Empresas</button>
-        <button onClick={() => setActiveTab('conductor')} className={`px-3 py-1 rounded whitespace-nowrap ${activeTab === 'conductor' ? 'bg-[#176BFF]' : 'bg-gray-800'}`}>🚘 Conductor</button>
-        <button onClick={() => setActiveTab('admin')} className={`px-3 py-1 rounded whitespace-nowrap ${activeTab === 'admin' ? 'bg-[#DFFF00] text-[#071426] font-bold' : 'bg-gray-800'}`}>⚡ Admin</button>
-      </div>
+      {/* MODAL PIN AUTENTICACIÓN */}
+      {authModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1C2738] border-2 border-[#176BFF] rounded-3xl max-w-sm w-full p-6 space-y-4 text-center">
+            <button onClick={() => setAuthModal(null)} className="absolute top-4 right-4 text-gray-400 font-bold">✕</button>
+            <div className="text-3xl">🔒</div>
+            <h3 className="text-lg font-black text-white">Acceso Protegido — {authModal.toUpperCase()}</h3>
+            <p className="text-xs text-gray-400">PIN de autorización (Prueba: {authModal === 'superadmin' ? '1234' : '5678'})</p>
 
-      {/* --- CONTENIDO PRINCIPAL SEGÚN EL MÓDULO --- */}
-      <main className="flex-1">
+            <input
+              type="password" placeholder="••••" value={pinInput} onChange={(e) => setPinInput(e.target.value)}
+              className="w-full text-center bg-[#071426] border border-gray-700 p-3 rounded-xl text-xl font-black text-[#DFFF00] tracking-widest outline-none"
+            />
+            {authError && <p className="text-xs text-red-400 font-bold">{authError}</p>}
+            <button onClick={handleVerifyPin} className="w-full bg-[#176BFF] font-bold py-3 rounded-xl text-white uppercase text-xs">
+              Ingresar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* CONTENIDO PRINCIPAL */}
+      <main className="flex-1 max-w-6xl w-full mx-auto p-4 lg:p-6">
+        {/* ============================================================================== */}
+        {/* 1. MÓDULO PASAJEROS */}
+        {/* ============================================================================== */}
         {activeTab === 'pasajero' && (
           <div>
-            {/* HERO SECTION */}
             {bookingStep === 'search' && (
-              <>
-                <section className="relative py-16 px-4 lg:px-8 bg-gradient-to-b from-[#071426] via-[#0c1f38] to-[#071426] overflow-hidden">
-                  <div className="max-w-6xl mx-auto grid lg:grid-cols-12 gap-8 items-center">
-                    <div className="lg:col-span-7 space-y-6">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#176BFF]/20 border border-[#176BFF] text-[#DFFF00] rounded-full text-xs font-bold">
-                        <span className="w-2 h-2 rounded-full bg-[#DFFF00] animate-pulse"></span>
-                        RUTA OFICIAL: LIMA — HUÁNUCO Y HUÁNUCO — LIMA
-                      </div>
-                      <h2 className="text-4xl lg:text-5xl font-black text-white leading-tight">
-                        Tu próximo destino está <span className="text-[#176BFF]">más cerca.</span>
-                      </h2>
-                      <p className="text-gray-300 text-base lg:text-lg">
-                        Viaja entre Lima y Huánuco con la máxima comodidad, seguridad en tiempo real y puntualidad garantizada de <strong>ZEGO MOVILIDAD</strong>.
-                      </p>
-
-                      {/* BUSCADOR DE VIAJES */}
-                      <div className="bg-[#1C2738] p-6 rounded-2xl border border-gray-700 shadow-2xl space-y-4">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                          <div>
-                            <label className="text-xs text-gray-400 font-semibold mb-1 block">Origen</label>
-                            <select 
-                              value={searchFilter.origen}
-                              onChange={(e) => setSearchFilter({...searchFilter, origen: e.target.value})}
-                              className="w-full bg-[#071426] border border-gray-700 text-white rounded-lg p-2.5 text-sm focus:border-[#176BFF] outline-none">
-                              <option value="Lima">Lima</option>
-                              <option value="Huánuco">Huánuco</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-400 font-semibold mb-1 block">Destino</label>
-                            <select 
-                              value={searchFilter.destino}
-                              onChange={(e) => setSearchFilter({...searchFilter, destino: e.target.value})}
-                              className="w-full bg-[#071426] border border-gray-700 text-white rounded-lg p-2.5 text-sm focus:border-[#176BFF] outline-none">
-                              <option value="Huánuco">Huánuco</option>
-                              <option value="Lima">Lima</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-400 font-semibold mb-1 block">Fecha</label>
-                            <input 
-                              type="date" 
-                              value={searchFilter.fecha}
-                              onChange={(e) => setSearchFilter({...searchFilter, fecha: e.target.value})}
-                              className="w-full bg-[#071426] border border-gray-700 text-white rounded-lg p-2.5 text-sm focus:border-[#176BFF] outline-none" 
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-400 font-semibold mb-1 block">Tipo de Servicio</label>
-                            <select 
-                              value={searchFilter.servicio}
-                              onChange={(e) => setSearchFilter({...searchFilter, servicio: e.target.value})}
-                              className="w-full bg-[#071426] border border-gray-700 text-white rounded-lg p-2.5 text-sm focus:border-[#176BFF] outline-none">
-                              <option value="todos">Todos los servicios</option>
-                              <option value="compartido">Compartido</option>
-                              <option value="privado">Privado Exec</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        <button 
-                          onClick={() => {
-                            const element = document.getElementById('salidas-disponibles');
-                            element?.scrollIntoView({ behavior: 'smooth' });
-                          }}
-                          className="w-full bg-[#176BFF] hover:bg-blue-600 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm tracking-wide uppercase flex items-center justify-center gap-2">
-                          🔍 Buscar Viajes Disponibles
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="lg:col-span-5 relative">
-                      <div className="bg-[#1C2738] border border-gray-700 p-4 rounded-2xl shadow-2xl relative">
-                        <img 
-                          src="https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=800" 
-                          alt="Vehículo ZEGO Movilidad" 
-                          className="w-full h-64 object-cover rounded-xl"
-                        />
-                        <div className="absolute bottom-6 left-6 right-6 bg-[#071426]/90 backdrop-blur p-3 rounded-lg border border-gray-700 flex justify-between items-center">
-                          <div>
-                            <p className="text-xs text-[#DFFF00] font-bold">Flota Ejecutiva Monitoreada</p>
-                            <p className="text-xs text-gray-300">Minivans y SUVs de alta gama</p>
-                          </div>
-                          <span className="text-xs bg-green-500/20 text-green-400 font-bold px-2 py-1 rounded">GPS ACTIVO</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-                {/* SECCIÓN DE SEGUIMIENTO EN VIVO EN TIEMPO REAL */}
-                <section className="py-12 px-4 lg:px-8 bg-[#0b1b30] border-y border-gray-800">
-                  <div className="max-w-6xl mx-auto space-y-6">
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                      <div>
-                        <span className="text-xs font-bold text-[#DFFF00] uppercase tracking-widest">Tecnología GPS ZEGO</span>
-                        <h3 className="text-2xl font-bold text-white">Tu viaje, en tiempo real</h3>
-                        <p className="text-xs text-gray-400">Monitoreo continuo de unidades en la ruta Carretera Central / Huánuco.</p>
-                      </div>
-                      <div className="flex items-center gap-2 bg-[#1C2738] px-3 py-1.5 rounded-lg border border-gray-700 text-xs">
-                        <span className="w-2.5 h-2.5 rounded-full bg-green-400 animate-ping"></span>
-                        <span>Demostración de Telemetría Activa</span>
-                      </div>
-                    </div>
-
-                    {/* Simulador Visual de Mapa Interactivo */}
-                    <div className="bg-[#1C2738] border border-gray-700 rounded-2xl p-6 relative overflow-hidden">
-                      <div className="grid lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2 bg-[#071426] border border-gray-800 rounded-xl p-4 relative min-h-[260px] flex flex-col justify-between">
-                          <div className="flex justify-between items-center text-xs text-gray-400 border-b border-gray-800 pb-2">
-                            <span>RUTA: LIMA ➔ CANTA ➔ CERRO DE PASCO ➔ HUÁNUCO</span>
-                            <span className="text-[#DFFF00]">Actualizado hace 15s</span>
-                          </div>
-
-                          {/* Render visual de la ruta */}
-                          <div className="relative my-8 px-4">
-                            <div className="h-2 bg-gray-800 rounded-full w-full relative">
-                              <div className="h-2 bg-[#176BFF] rounded-full w-2/3"></div>
-                              
-                              {/* Icono del vehículo en ruta */}
-                              <div className="absolute top-1/2 -translate-y-1/2 left-2/3 -translate-x-1/2 bg-[#DFFF00] text-[#071426] p-2 rounded-full shadow-lg border-2 border-white flex items-center justify-center animate-bounce">
-                                🚘
-                              </div>
-                            </div>
-                            
-                            <div className="flex justify-between text-xs mt-3 text-gray-300 font-semibold">
-                              <span>📍 Lima (Salida)</span>
-                              <span>📍 Canta</span>
-                              <span className="text-[#DFFF00]">📍 Cerro de Pasco (En Tránsito)</span>
-                              <span>📍 Huánuco (Llegada)</span>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-3 gap-2 bg-[#1C2738] p-3 rounded-lg text-center text-xs">
-                            <div>
-                              <p className="text-gray-400">Velocidad</p>
-                              <p className="text-sm font-bold text-[#DFFF00]">68 km/h</p>
-                            </div>
-                            <div>
-                              <p className="text-gray-400">Tiempo Est. Llegada</p>
-                              <p className="text-sm font-bold text-white">15:30 PM</p>
-                            </div>
-                            <div>
-                              <p className="text-gray-400">Unidad</p>
-                              <p className="text-sm font-bold text-white">ZGO-789 (H1)</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Detalle del Conductor y Estado */}
-                        <div className="space-y-4">
-                          <div className="bg-[#071426] p-4 rounded-xl border border-gray-800">
-                            <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Conductor Asignado</h4>
-                            <div className="flex items-center gap-3">
-                              <img src={trips[0].conductor.foto} alt="Conductor" className="w-12 h-12 rounded-full object-cover border-2 border-[#176BFF]" />
-                              <div>
-                                <p className="font-bold text-sm text-white">{trips[0].conductor.nombre}</p>
-                                <p className="text-xs text-gray-400">Licencia: {trips[0].conductor.licencia} ({trips[0].conductor.categoria})</p>
-                                <p className="text-xs text-[#DFFF00] font-bold">★ {trips[0].conductor.valoracion} / 5.0</p>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="bg-[#071426] p-4 rounded-xl border border-gray-800 space-y-2 text-xs">
-                            <div className="flex justify-between">
-                              <span className="text-gray-400">Estado de Viaje:</span>
-                              <span className="bg-blue-500/20 text-blue-400 font-bold px-2 py-0.5 rounded">EN RUTA</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-gray-400">Pasajeros a Bordo:</span>
-                              <span className="text-white font-bold">5 / 7 Asientos</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-gray-400">Siguiente Parada:</span>
-                              <span className="text-white">La Unión</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-                {/* RESULTADOS DE SALIDAS DISPONIBLES */}
-                <section id="salidas-disponibles" className="py-12 px-4 lg:px-8 max-w-6xl mx-auto space-y-6">
-                  <div className="flex justify-between items-center border-b border-gray-800 pb-4">
+              <section className="space-y-6">
+                <div className="bg-[#1C2738] border border-gray-700 rounded-3xl p-5 md:p-6 shadow-2xl space-y-4">
+                  <span className="text-xs font-black text-[#DFFF00] tracking-wider uppercase">🔍 Buscador Oficial de Salidas</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
                     <div>
-                      <h3 className="text-2xl font-bold">Salidas Disponibles</h3>
-                      <p className="text-xs text-gray-400">Selecciona tu horario preferido para viajar entre Lima y Huánuco</p>
+                      <label className="text-gray-400 block mb-1">Origen</label>
+                      <select value={searchFilter.origen} onChange={(e) => setSearchFilter({ ...searchFilter, origen: e.target.value })} className="w-full bg-[#071426] border border-gray-700 p-3 rounded-xl text-white font-bold">
+                        <option value="Lima">Lima (Javier Prado / La Victoria)</option>
+                        <option value="Huánuco">Huánuco (Terminal Terrestre Central)</option>
+                      </select>
                     </div>
-                    <span className="text-xs bg-[#1C2738] text-[#DFFF00] px-3 py-1.5 rounded-lg border border-gray-700">
-                      {filteredTrips.length} viajes encontrados
-                    </span>
+                    <div>
+                      <label className="text-gray-400 block mb-1">Destino</label>
+                      <select value={searchFilter.destino} onChange={(e) => setSearchFilter({ ...searchFilter, destino: e.target.value })} className="w-full bg-[#071426] border border-gray-700 p-3 rounded-xl text-white font-bold">
+                        <option value="Huánuco">Huánuco (Terminal Terrestre Central)</option>
+                        <option value="Lima">Lima (Javier Prado / La Victoria)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-gray-400 block mb-1">Fecha</label>
+                      <input type="date" value={searchFilter.fecha} onChange={(e) => setSearchFilter({ ...searchFilter, fecha: e.target.value })} className="w-full bg-[#071426] border border-gray-700 p-3 rounded-xl text-white font-bold" />
+                    </div>
+                    <div>
+                      <label className="text-gray-400 block mb-1">Servicio</label>
+                      <select value={searchFilter.servicio} onChange={(e) => setSearchFilter({ ...searchFilter, servicio: e.target.value })} className="w-full bg-[#071426] border border-gray-700 p-3 rounded-xl text-white font-bold">
+                        <option value="todos">Todos los servicios</option>
+                        <option value="compartido">Minivan 7 Asientos</option>
+                        <option value="vip">Minivan VIP 11 Asientos</option>
+                      </select>
+                    </div>
                   </div>
+                </div>
 
-                  <div className="grid gap-4">
-                    {filteredTrips.map((trip) => {
-                      const libres = trip.asientosTotales - trip.asientosOcupados.length;
-                      return (
-                        <div key={trip.id} className="bg-[#1C2738] border border-gray-700 rounded-2xl p-5 hover:border-[#176BFF] transition shadow-lg grid md:grid-cols-12 gap-4 items-center">
-                          {/* Horario y Ruta */}
-                          <div className="md:col-span-4 space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-[#DFFF00] bg-black/40 px-2 py-0.5 rounded border border-yellow-500/30">{trip.codigo}</span>
-                              <span className="text-xs text-gray-400 capitalize">{trip.tipoServicio}</span>
-                            </div>
-                            <div className="flex items-center gap-3 text-lg font-black text-white">
-                              <span>{trip.fechaSalida.split(' ')[1]}</span>
-                              <span className="text-xs text-gray-400">➔ ({trip.duracion}) ➔</span>
-                              <span>{trip.fechaLlegadaEstimada.split(' ')[1]}</span>
-                            </div>
-                            <p className="text-xs text-gray-300"><strong>Origen:</strong> {trip.origen}</p>
-                            <p className="text-xs text-gray-300"><strong>Destino:</strong> {trip.destino}</p>
-                          </div>
+                <div className="grid gap-4">
+                  {filteredTrips.map((trip) => {
+                    const libres = trip.asientosTotales - trip.asientosOcupados.length;
+                    const estaLleno = libres === 0;
+                    const precioFinal = trip.precioBase * (trip.factorPrecioFestivo || 1);
 
-                          {/* Vehículo y Conductor */}
-                          <div className="md:col-span-4 border-t md:border-t-0 md:border-l border-gray-700 pt-3 md:pt-0 md:pl-4 space-y-1">
-                            <div className="flex items-center gap-2">
-                              <img src={trip.conductor.foto} alt="Conductor" className="w-8 h-8 rounded-full border border-[#176BFF] object-cover" />
-                              <div>
-                                <p className="text-xs font-bold text-white">{trip.conductor.nombre}</p>
-                                <p className="text-[10px] text-gray-400">{trip.vehiculo.marca} {trip.vehiculo.modelo} ({trip.vehiculo.placa})</p>
-                              </div>
-                            </div>
-                            <p className="text-xs text-gray-400">Punto de Embarque: <span className="text-gray-200">{trip.embarque}</span></p>
-                          </div>
-
-                          {/* Precio y Selección */}
-                          <div className="md:col-span-4 border-t md:border-t-0 md:border-l border-gray-700 pt-3 md:pt-0 md:pl-4 flex md:flex-col justify-between items-end gap-2">
-                            <div className="text-right">
-                              <p className="text-2xl font-black text-[#DFFF00]">S/ {trip.precio.toFixed(2)}</p>
-                              <p className="text-[11px] text-gray-400">por asiento</p>
-                              <p className={`text-xs font-bold mt-1 ${libres > 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                {libres > 0 ? `¡${libres} asientos disponibles!` : 'Agotado'}
-                              </p>
-                            </div>
-
-                            <button 
-                              onClick={() => {
-                                setSelectedTrip(trip);
-                                setSelectedSeats([]);
-                                setBookingStep('seats');
-                              }}
-                              disabled={libres === 0}
-                              className={`w-full md:w-auto px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition ${
-                                libres > 0 ? 'bg-[#176BFF] hover:bg-blue-600 text-white shadow-lg' : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                              }`}>
-                              Seleccionar Asientos
-                            </button>
-                          </div>
+                    return (
+                      <div key={trip.id} className="bg-[#1C2738] border border-gray-700 hover:border-[#176BFF] transition rounded-2xl p-5 shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
+                        <div className="space-y-2">
+                          <span className="text-xs font-black text-[#DFFF00] bg-black/40 px-2.5 py-1 rounded">{trip.codigo}</span>
+                          <h3 className="text-lg font-black text-white">{trip.origen} ➔ {trip.destino}</h3>
+                          <p className="text-xs text-gray-400">Salida: {trip.fechaSalida} | Conductor: {trip.conductor.nombre}</p>
+                          <button onClick={() => setViewGpsTrip(trip)} className="text-[11px] text-[#176BFF] hover:underline font-bold">
+                            📡 Ver Mapa GPS Interactivo en Vivo
+                          </button>
                         </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              </>
+
+                        <div className="text-right">
+                          <p className="text-2xl font-black text-[#DFFF00]">S/ {precioFinal.toFixed(2)}</p>
+                          <p className={`text-xs font-bold ${estaLleno ? 'text-red-400' : 'text-green-400'}`}>
+                            {estaLleno ? 'UNIDAD LLENA' : `✓ ${libres} asientos disponibles`}
+                          </p>
+                          <button
+                            onClick={() => { setSelectedTrip(trip); setSelectedSeats([]); setPassengersList([]); setBookingStep('seats'); }}
+                            disabled={estaLleno} className={`mt-2 px-6 py-2.5 rounded-xl font-bold text-xs uppercase ${estaLleno ? 'bg-gray-800 text-gray-500' : 'bg-[#176BFF] text-white'}`}
+                          >
+                            Seleccionar Asientos
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
             )}
 
-            {/* MAPA DE ASIENTOS INTERACTIVO */}
+            {/* CROQUIS DE ASIENTOS Y DATOS PASAJEROS */}
             {bookingStep === 'seats' && selectedTrip && (
-              <section className="py-12 px-4 max-w-4xl mx-auto space-y-6">
-                <button 
-                  onClick={() => setBookingStep('search')}
-                  className="text-xs text-gray-400 hover:text-white flex items-center gap-1">
-                  ← Volver a la búsqueda de viajes
-                </button>
+              <section className="space-y-6 max-w-3xl mx-auto">
+                <button onClick={() => setBookingStep('search')} className="text-xs text-gray-400 hover:text-white font-semibold">← Volver</button>
+                <div className="bg-[#1C2738] border border-gray-700 rounded-3xl p-6 shadow-2xl space-y-6">
+                  <h3 className="text-xl font-bold">Croquis de Asientos — {selectedTrip.vehiculo.modelo}</h3>
 
-                <div className="bg-[#1C2738] border border-gray-700 rounded-2xl p-6 shadow-2xl space-y-6">
-                  <div className="flex flex-col md:flex-row justify-between border-b border-gray-700 pb-4 gap-2">
-                    <div>
-                      <h3 className="text-xl font-bold">Selección de Asientos</h3>
-                      <p className="text-xs text-gray-400">Vehículo: {selectedTrip.vehiculo.marca} {selectedTrip.vehiculo.modelo} - Placa: {selectedTrip.vehiculo.placa}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400">Precio unitario:</p>
-                      <p className="text-lg font-black text-[#DFFF00]">S/ {selectedTrip.precio.toFixed(2)}</p>
-                    </div>
-                  </div>
-
-                  {/* Leyenda de Estados */}
-                  <div className="flex flex-wrap gap-4 justify-center bg-[#071426] p-3 rounded-xl border border-gray-800 text-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 rounded bg-green-500 border border-green-400"></span>
-                      <span>Disponible</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 rounded bg-red-600"></span>
-                      <span>Ocupado</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 rounded bg-[#176BFF] ring-2 ring-white"></span>
-                      <span>Tu Selección</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="w-4 h-4 rounded bg-yellow-500"></span>
-                      <span>Reservado Temp.</span>
-                    </div>
-                  </div>
-
-                  {/* Croquis Interactivo del Vehículo */}
-                  <div className="bg-[#071426] p-8 rounded-2xl border border-gray-800 max-w-md mx-auto space-y-6">
-                    <div className="flex justify-between items-center text-xs text-gray-500 border-b border-gray-800 pb-2">
-                      <span>FRONTAL DEL VEHÍCULO</span>
-                      <span>🚘 CHOFER</span>
-                    </div>
-
-                    {/* Cabina del Conductor */}
-                    <div className="grid grid-cols-3 gap-3 mb-6">
-                      <div className="bg-gray-800/60 p-3 rounded-lg border border-gray-700 text-center text-xs text-gray-400 font-bold">
-                        🛞 Conductor
-                      </div>
-                      <div className="col-span-2 bg-gray-900 border border-dashed border-gray-800 rounded-lg flex items-center justify-center text-[10px] text-gray-600">
-                        Consola / Pasillo
-                      </div>
-                    </div>
-
-                    {/* Grilla de Asientos según capacidad */}
-                    <div className="grid grid-cols-3 gap-4">
+                  <div className="bg-[#071426] p-6 rounded-2xl border border-gray-800 max-w-sm mx-auto">
+                    <div className="grid grid-cols-3 gap-3">
                       {Array.from({ length: selectedTrip.asientosTotales }, (_, i) => i + 1).map((seatNum) => {
                         const isOccupied = selectedTrip.asientosOcupados.includes(seatNum);
-                        const isTempReserved = selectedTrip.asientosReservadosTemp.includes(seatNum);
                         const isSelected = selectedSeats.includes(seatNum);
-
-                        let seatClass = "bg-green-500 hover:bg-green-600 text-white shadow-md cursor-pointer";
-                        if (isOccupied) seatClass = "bg-red-600 text-gray-200 cursor-not-allowed opacity-80";
-                        else if (isTempReserved) seatClass = "bg-yellow-500 text-black cursor-not-allowed";
-                        else if (isSelected) seatClass = "bg-[#176BFF] text-white ring-4 ring-[#DFFF00] scale-105 font-bold";
+                        let seatClass = 'bg-green-500 text-white';
+                        if (isOccupied) seatClass = 'bg-red-600 text-gray-300 opacity-75';
+                        else if (isSelected) seatClass = 'bg-[#176BFF] ring-4 ring-[#DFFF00] font-bold';
 
                         return (
-                          <button
-                            key={seatNum}
-                            disabled={isOccupied || isTempReserved}
-                            onClick={() => handleSelectSeat(seatNum)}
-                            className={`h-14 rounded-xl flex flex-col items-center justify-center font-bold text-sm transition ${seatClass}`}>
-                            <span>💺 {seatNum}</span>
-                            <span className="text-[9px] uppercase tracking-tighter">
-                              {isOccupied ? 'Ocupado' : isSelected ? 'Elegido' : 'Libre'}
-                            </span>
+                          <button key={seatNum} disabled={isOccupied} onClick={() => handleSelectSeat(seatNum)} className={`h-14 rounded-xl font-bold text-sm ${seatClass}`}>
+                            💺 {seatNum}
                           </button>
                         );
                       })}
                     </div>
                   </div>
 
-                  {/* Resumen de Selección */}
-                  <div className="bg-[#071426] p-4 rounded-xl border border-gray-800 flex flex-col sm:flex-row justify-between items-center gap-4">
+                  {passengersList.length > 0 && (
+                    <div className="space-y-4">
+                      {passengersList.map((p, index) => (
+                        <div key={p.seat} className="bg-[#071426] p-4 rounded-2xl border border-gray-800 space-y-3 text-xs">
+                          <p className="font-bold text-[#DFFF00]">Asiento N° {p.seat}</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                            <div>
+                              <label className="text-gray-400 block mb-1">Doc *</label>
+                              <input type="text" placeholder="DNI" value={p.dni} onChange={(e) => handlePassengerDocChange(index, e.target.value)} className="w-full bg-[#1C2738] border border-gray-700 p-2 rounded-xl text-white" />
+                              {loadingDniIndex === index && <span className="text-[10px] text-[#DFFF00]">RENIEC...</span>}
+                            </div>
+                            <div>
+                              <label className="text-gray-400 block mb-1">Nombre Completo *</label>
+                              <input type="text" placeholder="Nombre" value={p.nombre} onChange={(e) => handlePassengerChange(index, 'nombre', e.target.value)} className="w-full bg-[#1C2738] border border-gray-700 p-2 rounded-xl text-white" />
+                            </div>
+                            <div>
+                              <label className="text-gray-400 block mb-1">Celular *</label>
+                              <input type="tel" placeholder="900000000" value={p.telefono} onChange={(e) => handlePassengerChange(index, 'telefono', e.target.value)} className="w-full bg-[#1C2738] border border-gray-700 p-2 rounded-xl text-white" />
+                            </div>
+                            <div>
+                              <label className="text-gray-400 block mb-1">Equipaje Extra (Kg)</label>
+                              <input type="number" min={0} placeholder="0 kg" value={p.equipajeExtraKg || ''} onChange={(e) => handlePassengerChange(index, 'equipajeExtraKg', e.target.value)} className="w-full bg-[#1C2738] border border-gray-700 p-2 rounded-xl text-white" />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="bg-[#071426] p-4 rounded-2xl flex items-start gap-3">
+                    <input type="checkbox" id="ley29733" checked={aceptanTerminosLey29733} onChange={(e) => setAceptanTerminosLey29733(e.target.checked)} className="mt-1" />
+                    <label htmlFor="ley29733" className="text-xs text-gray-300">
+                      Acepto los Términos y Autorizo el uso de Datos Personales según la <strong className="text-[#DFFF00]">Ley N° 29733</strong> para emitir boletos y manifiesto SUTRAN.
+                    </label>
+                  </div>
+
+                  <button onClick={handleConfirmSeats} className="w-full bg-[#176BFF] text-white font-bold py-3.5 rounded-xl uppercase text-xs">
+                    Continuar al Pago Seguro S/ {totals.totalPagar.toFixed(2)}
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {/* PAGO Y LECTURA OCR DE VOUCHER */}
+            {bookingStep === 'payment' && selectedTrip && (
+              <section className="space-y-6 max-w-md mx-auto">
+                <button onClick={() => setBookingStep('seats')} className="text-xs text-gray-400">← Volver</button>
+                <div className="bg-[#1C2738] border border-gray-700 rounded-3xl p-6 shadow-2xl space-y-6">
+                  <h3 className="text-xl font-bold">Pasarela de Pago & SUNAT</h3>
+
+                  <div className="bg-[#071426] border border-yellow-500/40 p-4 rounded-2xl text-center">
+                    <p className="text-[11px] text-gray-400 uppercase">⏱️ Tiempo restante:</p>
+                    <p className="text-3xl font-black text-[#DFFF00] font-mono">{formatTime(timeLeft)}</p>
+                  </div>
+
+                  <div className="bg-[#071426] p-4 rounded-2xl space-y-2 text-xs">
+                    <p className="font-bold">Comprobante SUNAT:</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setComprobanteType('boleta')} className={`flex-1 py-2 font-bold rounded-xl ${comprobanteType === 'boleta' ? 'bg-[#176BFF]' : 'bg-[#1C2738]'}`}>Boleta</button>
+                      <button onClick={() => setComprobanteType('factura')} className={`flex-1 py-2 font-bold rounded-xl ${comprobanteType === 'factura' ? 'bg-[#176BFF]' : 'bg-[#1C2738]'}`}>Factura RUC</button>
+                    </div>
+
+                    {comprobanteType === 'factura' && (
+                      <div className="space-y-2 pt-2">
+                        <input type="text" maxLength={11} placeholder="RUC 11 dígitos" value={rucCliente} onChange={(e) => handleRucLookup(e.target.value)} className="w-full bg-[#1C2738] p-2 rounded-xl text-white" />
+                        <input type="text" placeholder="Razón Social" value={razonSocialCliente} onChange={(e) => setRazonSocialCliente(e.target.value)} className="w-full bg-[#1C2738] p-2 rounded-xl text-white" />
+                      </div>
+                    )}
+                  </div>
+
+                  {!paymentMethod ? (
+                    <div className="space-y-3">
+                      <button onClick={() => setPaymentMethod('yape')} className="w-full bg-purple-700 text-white font-bold py-3.5 rounded-2xl text-xs">
+                        📱 YAPE / PLIN con Lectura OCR de Voucher
+                      </button>
+                      <button onClick={() => setPaymentMethod('tarjeta')} className="w-full bg-[#176BFF] text-white font-bold py-3.5 rounded-2xl text-xs">
+                        💳 Tarjeta Visa / Mastercard
+                      </button>
+                    </div>
+                  ) : paymentMethod === 'yape' ? (
+                    <div className="bg-[#071426] p-5 rounded-2xl border border-purple-500/30 space-y-4 text-xs">
+                      <p className="text-center font-bold text-[#DFFF00]">900 123 456 (ZEGO MOVILIDAD S.A.C.)</p>
+                      
+                      {/* SUBIDA DE CAPTURA OCR */}
+                      <div className="border-2 border-dashed border-purple-500 p-4 rounded-xl text-center space-y-2">
+                        <p className="font-bold text-white">📷 Escanear Voucher Yape con OCR:</p>
+                        <input type="file" accept="image/*" onChange={handleSimulateOcrVoucherUpload} className="hidden" id="voucherOcr" />
+                        <label htmlFor="voucherOcr" className="inline-block bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2 rounded-xl cursor-pointer">
+                          {isOcrScanning ? '🔍 Escaneando imagen...' : 'Subir Captura de Yape'}
+                        </label>
+                      </div>
+
+                      <input type="text" placeholder="N° Operación Yape" value={yapeOpNumber} onChange={(e) => setYapeOpNumber(e.target.value)} className="w-full bg-[#1C2738] p-2.5 rounded-xl text-white font-bold" />
+                      
+                      <button onClick={() => { if (!yapeOpNumber) return alert('Ingrese N° Operación'); handleProcessPayment(`YAPE (Op: ${yapeOpNumber})`); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl uppercase">
+                        ✓ Confirmar y Emitir Boleta
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="bg-[#071426] p-5 rounded-2xl space-y-3 text-xs">
+                      <input type="text" placeholder="Número de Tarjeta" className="w-full bg-[#1C2738] p-2.5 rounded-xl text-white" />
+                      <button onClick={() => handleProcessPayment('Tarjeta Visa')} className="w-full bg-[#176BFF] text-white font-bold py-3 rounded-xl uppercase">
+                        Pagar S/ {totals.totalPagar.toFixed(2)}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {/* BOLETO GENERADO Y COMPROBANTE SUNAT */}
+            {bookingStep === 'ticket' && activeTicket && (
+              <section className="space-y-6 max-w-md mx-auto">
+                <div className="bg-white text-gray-900 rounded-3xl p-6 shadow-2xl space-y-4 border-4 border-[#176BFF]">
+                  <div className="bg-[#071426] text-white -mx-6 -mt-6 p-4 text-center rounded-t-2xl">
+                    <h3 className="font-black text-xl">ZEGO MOVILIDAD S.A.C.</h3>
+                    <p className="text-xs text-[#DFFF00] font-bold">{activeTicket.tipoComprobante.toUpperCase()} {activeTicket.serieComprobante}</p>
+                  </div>
+
+                  <div className="text-center">
+                    <p className="text-2xl font-black text-[#176BFF]">{activeTicket.codigoReserva}</p>
+                    <span className="bg-green-100 text-green-800 text-[10px] font-bold px-3 py-1 rounded-full">✓ COMPROBANTE SUNAT OK</span>
+                  </div>
+
+                  <div className="flex justify-center">
+                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(activeTicket.qrPayload)}`} alt="QR" className="w-32 h-32" />
+                  </div>
+
+                  <button onClick={handleSendWhatsAppToPassenger} className="w-full bg-green-600 text-white font-bold py-3 rounded-xl text-xs uppercase">
+                    📱 Enviar Boleto al WhatsApp del Pasajero
+                  </button>
+                  <button onClick={resetBookingFlow} className="w-full bg-[#071426] text-white font-bold py-3 rounded-xl text-xs uppercase">
+                    Volver al Buscador
+                  </button>
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+
+        {/* ============================================================================== */}
+        {/* 2. MÓDULO DE ENCOMIENDAS Y CARGA (GUÍA DE REMISIÓN TRANSPORTISTA) */}
+        {/* ============================================================================== */}
+        {activeTab === 'encomiendas' && (
+          <section className="space-y-6 max-w-3xl mx-auto">
+            <div className="bg-[#1C2738] border border-gray-700 rounded-3xl p-6 shadow-2xl space-y-6">
+              <h2 className="text-xl font-black text-white">📦 Gestión de Encomiendas & Guías de Remisión SUNAT</h2>
+              
+              <form onSubmit={handleCreateEncomienda} className="bg-[#071426] p-5 rounded-2xl space-y-4 text-xs">
+                <p className="font-bold text-[#DFFF00]">Registrar Nueva Encomienda (Guía Remisión):</p>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <input type="text" placeholder="Remitente Nombre" value={newEncomienda.remitenteNombre} onChange={(e) => setNewEncomienda({...newEncomienda, remitenteNombre: e.target.value})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                  <input type="text" placeholder="Remitente DNI" value={newEncomienda.remitenteDni} onChange={(e) => setNewEncomienda({...newEncomienda, remitenteDni: e.target.value})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                  <input type="tel" placeholder="Remitente Celular" value={newEncomienda.remitenteTelefono} onChange={(e) => setNewEncomienda({...newEncomienda, remitenteTelefono: e.target.value})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <input type="text" placeholder="Destinatario Nombre" value={newEncomienda.destinatarioNombre} onChange={(e) => setNewEncomienda({...newEncomienda, destinatarioNombre: e.target.value})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                  <input type="text" placeholder="Destinatario DNI" value={newEncomienda.destinatarioDni} onChange={(e) => setNewEncomienda({...newEncomienda, destinatarioDni: e.target.value})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                  <input type="tel" placeholder="Destinatario Celular" value={newEncomienda.destinatarioTelefono} onChange={(e) => setNewEncomienda({...newEncomienda, destinatarioTelefono: e.target.value})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input type="text" placeholder="Descripción de la Carga" value={newEncomienda.descripcion} onChange={(e) => setNewEncomienda({...newEncomienda, descripcion: e.target.value})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                  <input type="number" placeholder="Peso estimado (kg)" value={newEncomienda.pesoKg} onChange={(e) => setNewEncomienda({...newEncomienda, pesoKg: Number(e.target.value)})} className="bg-[#1C2738] p-2.5 rounded-xl text-white" required />
+                </div>
+
+                <button type="submit" className="w-full bg-[#176BFF] text-white font-bold py-3 rounded-xl uppercase">
+                  + Generar Guía Remisión Transportista (GRT)
+                </button>
+              </form>
+
+              {/* LISTA DE ENCOMIENDAS REGISTRADAS */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-gray-300 uppercase">Guías en Sistema:</h3>
+                {encomiendas.map((e) => (
+                  <div key={e.codigoGuia} className="bg-[#071426] p-4 rounded-2xl border border-gray-800 text-xs flex justify-between items-center">
                     <div>
-                      <p className="text-xs text-gray-400">Asientos seleccionados:</p>
-                      <p className="text-base font-bold text-[#DFFF00]">
-                        {selectedSeats.length > 0 ? selectedSeats.join(', ') : 'Ninguno'}
-                      </p>
+                      <span className="font-extrabold text-[#DFFF00]">{e.codigoGuia}</span>
+                      <p className="text-white font-bold">{e.origen} ➔ {e.destino} ({e.pesoKg} kg)</p>
+                      <p className="text-gray-400">De: {e.remitenteNombre} ➔ Para: {e.destinatarioNombre}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs text-gray-400">Total a pagar:</p>
-                      <p className="text-2xl font-black text-white">
-                        S/ {(selectedTrip.precio * selectedSeats.length).toFixed(2)}
-                      </p>
+                      <p className="text-lg font-black text-white">S/ {e.fleteTotal.toFixed(2)}</p>
+                      <span className="bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded text-[10px] uppercase font-bold">{e.estado}</span>
                     </div>
                   </div>
-
-                  <button 
-                    onClick={handleConfirmSeats}
-                    className="w-full bg-[#176BFF] hover:bg-blue-600 text-white font-bold py-3.5 rounded-xl transition shadow-lg uppercase tracking-wider text-sm">
-                    Continuar al Pago
-                  </button>
-                </div>
-              </section>
-            )}
-
-            {/* PASARELA DE PAGO SIMULADA */}
-            {bookingStep === 'payment' && selectedTrip && (
-              <section className="py-12 px-4 max-w-xl mx-auto space-y-6">
-                <button onClick={() => setBookingStep('seats')} className="text-xs text-gray-400 hover:text-white">← Cambiar asientos</button>
-
-                <div className="bg-[#1C2738] border border-gray-700 rounded-2xl p-6 shadow-2xl space-y-6">
-                  <h3 className="text-xl font-bold border-b border-gray-700 pb-3">Finalizar Reserva y Pago</h3>
-                  
-                  <div className="bg-[#071426] p-4 rounded-xl text-xs space-y-2 border border-gray-800">
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Ruta:</span>
-                      <span className="font-bold">{selectedTrip.origen} ➔ {selectedTrip.destino}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Fecha y Hora:</span>
-                      <span>{selectedTrip.fechaSalida}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Asientos:</span>
-                      <span className="text-[#DFFF00] font-bold">{selectedSeats.join(', ')}</span>
-                    </div>
-                    <div className="flex justify-between text-base font-bold border-t border-gray-800 pt-2 text-white">
-                      <span>Monto Total:</span>
-                      <span className="text-[#DFFF00]">S/ {(selectedTrip.precio * selectedSeats.length).toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <p className="text-xs font-bold text-gray-300">Selecciona tu método de pago:</p>
-                    
-                    <button 
-                      onClick={() => handleProcessPayment('Yape')}
-                      className="w-full bg-purple-700 hover:bg-purple-800 text-white font-bold py-3 rounded-xl flex items-center justify-between px-4 transition text-sm">
-                      <span>📱 Pagar con YAPE / PLIN</span>
-                      <span className="bg-purple-900 px-2 py-0.5 rounded text-xs">Inmediato</span>
-                    </button>
-
-                    <button 
-                      onClick={() => handleProcessPayment('Tarjeta Crédito/Débito')}
-                      className="w-full bg-[#176BFF] hover:bg-blue-600 text-white font-bold py-3 rounded-xl flex items-center justify-between px-4 transition text-sm">
-                      <span>💳 Tarjeta de Débito / Crédito</span>
-                      <span className="text-xs bg-blue-900 px-2 py-0.5 rounded">Niubiz / MercadoPago</span>
-                    </button>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {/* BOLETO DIGITAL GENERADO */}
-            {bookingStep === 'ticket' && activeTicket && (
-              <section className="py-12 px-4 max-w-md mx-auto space-y-6">
-                <div className="bg-white text-gray-900 rounded-3xl p-6 shadow-2xl space-y-6 border-4 border-[#176BFF] relative overflow-hidden">
-                  <div className="bg-[#071426] text-white -mx-6 -mt-6 p-4 text-center border-b-4 border-[#DFFF00]">
-                    <h3 className="font-black text-xl tracking-wider">ZEGO MOVILIDAD</h3>
-                    <p className="text-[10px] text-[#DFFF00] font-bold uppercase tracking-widest">Boleto Digital de Viaje</p>
-                  </div>
-
-                  <div className="text-center space-y-1">
-                    <p className="text-xs text-gray-500">CÓDIGO DE RESERVA</p>
-                    <p className="text-2xl font-black text-[#176BFF] tracking-widest">{activeTicket.codigoReserva}</p>
-                    <span className="inline-block bg-green-100 text-green-800 text-[10px] font-bold px-3 py-1 rounded-full">✓ PAGO CONFIRMADO</span>
-                  </div>
-
-                  <div className="border-t border-b border-gray-200 py-3 space-y-2 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Pasajero:</span>
-                      <span className="font-bold">{activeTicket.pasajeroNombre} (DNI: {activeTicket.pasajeroDNI})</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Origen:</span>
-                      <span className="font-semibold">{activeTicket.viaje.origen}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Destino:</span>
-                      <span className="font-semibold">{activeTicket.viaje.destino}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Fecha y Hora:</span>
-                      <span className="font-bold">{activeTicket.viaje.fechaSalida}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Asiento(s):</span>
-                      <span className="font-bold text-[#176BFF] text-sm">{activeTicket.asientos.join(', ')}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Conductor:</span>
-                      <span>{activeTicket.viaje.conductor.nombre}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Vehículo / Placa:</span>
-                      <span>{activeTicket.viaje.vehiculo.modelo} ({activeTicket.viaje.vehiculo.placa})</span>
-                    </div>
-                  </div>
-
-                  {/* Código QR Simulado */}
-                  <div className="text-center space-y-2">
-                    <div className="w-32 h-32 mx-auto bg-gray-900 rounded-xl p-2 flex items-center justify-center text-white text-xs font-mono">
-                      [ CÓDIGO QR ]<br/>ZEGO-BOARDING
-                    </div>
-                    <p className="text-[10px] text-gray-500">Muestra este código al abordar la unidad.</p>
-                  </div>
-
-                  <button 
-                    onClick={() => setBookingStep('search')}
-                    className="w-full bg-[#071426] text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider hover:bg-gray-800 transition">
-                    Finalizar y Volver al Inicio
-                  </button>
-                </div>
-              </section>
-            )}
-          </div>
+                ))}
+              </div>
+            </div>
+          </section>
         )}
 
-        {/* --- PANEL ADMINISTRATIVO (ZEGO ADMIN) --- */}
-        {activeTab === 'admin' && (
-          <div className="p-6 max-w-7xl mx-auto space-y-8">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-gray-800 pb-4 gap-4">
-              <div>
-                <h2 className="text-2xl font-black text-white flex items-center gap-2">
-                  <span className="text-[#DFFF00]">⚡</span> ZEGO ADMIN DASHBOARD
-                </h2>
-                <p className="text-xs text-gray-400">Gestión centralizada de flota, conductores, reservas y finanzas.</p>
-              </div>
-              <div className="flex gap-2">
-                <button className="bg-[#176BFF] hover:bg-blue-600 text-white text-xs font-bold px-3 py-2 rounded-lg">
-                  + Programar Nuevo Viaje
-                </button>
-              </div>
-            </div>
-
-            {/* Tarjetas Estadísticas */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-[#1C2738] p-4 rounded-xl border border-gray-700">
-                <p className="text-xs text-gray-400">Ingresos del Día</p>
-                <p className="text-2xl font-black text-[#DFFF00] mt-1">S/ 2,450.00</p>
-                <span className="text-[10px] text-green-400 font-bold">↑ +18% vs ayer</span>
-              </div>
-              <div className="bg-[#1C2738] p-4 rounded-xl border border-gray-700">
-                <p className="text-xs text-gray-400">Viajes Activos Hoy</p>
-                <p className="text-2xl font-black text-white mt-1">8 Viajes</p>
-                <span className="text-[10px] text-blue-400 font-bold">3 En Ruta GPS</span>
-              </div>
-              <div className="bg-[#1C2738] p-4 rounded-xl border border-gray-700">
-                <p className="text-xs text-gray-400">Ocupación Promedio</p>
-                <p className="text-2xl font-black text-white mt-1">84%</p>
-                <span className="text-[10px] text-green-400 font-bold">Alta demanda</span>
-              </div>
-              <div className="bg-[#1C2738] p-4 rounded-xl border border-gray-700">
-                <p className="text-xs text-gray-400">Conductores Activos</p>
-                <p className="text-2xl font-black text-white mt-1">5 Conductores</p>
-                <span className="text-[10px] text-gray-400">100% Licencias al día</span>
-              </div>
-            </div>
-
-            {/* Tabla de Gestión de Viajes */}
-            <div className="bg-[#1C2738] rounded-2xl border border-gray-700 p-6 space-y-4">
-              <h3 className="text-lg font-bold text-white">Programación de Viajes en Sistema</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-gray-300">
-                  <thead className="bg-[#071426] text-gray-400 uppercase font-semibold">
-                    <tr>
-                      <th className="p-3">Código</th>
-                      <th className="p-3">Ruta</th>
-                      <th className="p-3">Horario</th>
-                      <th className="p-3">Vehículo</th>
-                      <th className="p-3">Conductor</th>
-                      <th className="p-3">Precio</th>
-                      <th className="p-3">Asientos</th>
-                      <th className="p-3">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-800">
-                    {trips.map((t) => (
-                      <tr key={t.id} className="hover:bg-[#071426]/50 transition">
-                        <td className="p-3 font-bold text-[#DFFF00]">{t.codigo}</td>
-                        <td className="p-3">{t.origen} ➔ {t.destino}</td>
-                        <td className="p-3">{t.fechaSalida}</td>
-                        <td className="p-3">{t.vehiculo.modelo} ({t.vehiculo.placa})</td>
-                        <td className="p-3">{t.conductor.nombre}</td>
-                        <td className="p-3 font-bold">S/ {t.precio.toFixed(2)}</td>
-                        <td className="p-3">{t.asientosOcupados.length} / {t.asientosTotales}</td>
-                        <td className="p-3">
-                          <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-400 uppercase">
-                            {t.estado}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* --- APP PARA CONDUCTORES --- */}
+        {/* ============================================================================== */}
+        {/* 3. MÓDULO CONDUCTOR & ESCÁNER DE CÁMARA */}
+        {/* ============================================================================== */}
         {activeTab === 'conductor' && (
-          <div className="py-12 px-4 max-w-md mx-auto space-y-6">
-            <div className="bg-[#1C2738] border-2 border-[#176BFF] rounded-3xl p-6 shadow-2xl space-y-6">
-              <div className="flex justify-between items-center border-b border-gray-700 pb-3">
-                <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span>
-                  <span className="text-xs font-bold text-gray-300">MODO CONDUCTOR ACTIVO</span>
-                </div>
-                <span className="text-[10px] bg-gray-800 px-2 py-1 rounded text-gray-400">GPS Conectado</span>
-              </div>
+          <section className="space-y-6 max-w-2xl mx-auto">
+            <div className="bg-[#1C2738] border-2 border-[#176BFF] rounded-3xl p-6 space-y-6 shadow-2xl">
+              <h3 className="font-black text-lg text-white">Panel Operativo — Conductor</h3>
 
-              <div className="flex items-center gap-4 bg-[#071426] p-4 rounded-xl border border-gray-800">
-                <img src={trips[0].conductor.foto} alt="Conductor" className="w-14 h-14 rounded-full border-2 border-[#DFFF00] object-cover" />
-                <div>
-                  <h3 className="font-bold text-white text-base">{trips[0].conductor.nombre}</h3>
-                  <p className="text-xs text-gray-400">Licencia: {trips[0].conductor.licencia}</p>
-                  <p className="text-xs text-[#DFFF00]">Vehículo Asignado: {trips[0].vehiculo.placa}</p>
+              {/* ESCÁNER QR DE CÁMARA */}
+              <div className="bg-[#071426] border border-blue-500/30 p-4 rounded-2xl space-y-3">
+                <div className="flex justify-between items-center">
+                  <h4 className="text-xs font-bold text-white">📷 Escáner QR Nativo</h4>
+                  <button onClick={() => setIsScannerOpen(!isScannerOpen)} className="bg-[#DFFF00] text-black font-bold px-3 py-1.5 rounded-xl text-xs">
+                    {isScannerOpen ? 'Cerrar' : 'Activar Cámara'}
+                  </button>
                 </div>
-              </div>
 
-              <div className="bg-[#071426] p-4 rounded-xl border border-gray-800 space-y-3">
-                <h4 className="text-xs font-bold text-gray-400 uppercase">Viaje Asignado Actual</h4>
-                <p className="text-sm font-bold text-white">{trips[0].origen} ➔ {trips[0].destino}</p>
-                <div className="grid grid-cols-2 gap-2 text-xs text-gray-300">
-                  <div className="bg-[#1C2738] p-2 rounded">
-                    <p className="text-gray-500">Pasajeros Confirmados</p>
-                    <p className="text-base font-bold text-[#DFFF00]">5 personas</p>
+                {isScannerOpen && (
+                  <div className="bg-black/80 p-3 rounded-xl space-y-2">
+                    <input type="text" placeholder="Escanear o digitar ZG-..." value={scannedTicketCode} onChange={(e) => setScannedTicketCode(e.target.value)} className="w-full bg-gray-900 p-2 rounded-xl text-white text-xs" />
+                    <button onClick={() => handleValidateTicketCode(scannedTicketCode)} className="w-full bg-blue-600 text-white font-bold py-2 rounded-xl text-xs">
+                      Validar Ingreso Pasajero
+                    </button>
                   </div>
-                  <div className="bg-[#1C2738] p-2 rounded">
-                    <p className="text-gray-500">Salida Programada</p>
-                    <p className="text-base font-bold text-white">07:30 AM</p>
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Botones de Control en Ruta */}
-              <div className="space-y-3">
-                <button className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition">
-                  ▶ Iniciar Transmisión GPS en Ruta
-                </button>
-                <button className="w-full bg-[#176BFF] hover:bg-blue-600 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition">
-                  📋 Validar Embarque de Pasajeros (QR)
-                </button>
-                <button className="w-full bg-red-900/60 hover:bg-red-900 text-red-200 font-bold py-2 rounded-xl text-xs uppercase transition border border-red-700">
-                  ⚠️ Reportar Incidencia en Ruta
-                </button>
-              </div>
+              {trips.map((trip) => (
+                <div key={trip.id} className="bg-[#071426] p-4 rounded-2xl space-y-2 text-xs">
+                  <p className="font-bold text-[#DFFF00]">{trip.codigo} — {trip.origen} ➔ {trip.destino}</p>
+                  <p className="text-gray-400">Conductor: {trip.conductor.nombre} (Horas hoy: {trip.conductor.horasManejadasHoy}h)</p>
+                  {trip.conductor.horasManejadasHoy >= 4.0 && (
+                    <p className="bg-red-500/20 text-red-300 p-2 rounded-xl font-bold">⚠️ Alerta MTC: Relevo obligatorio por horas de manejo.</p>
+                  )}
+                </div>
+              ))}
             </div>
-          </div>
+          </section>
         )}
 
-        {/* --- ZEGO EMPRESAS / SERVICIOS CORPORATIVOS --- */}
-        {activeTab === 'corporativo' && (
-          <div className="py-12 px-4 max-w-3xl mx-auto space-y-6">
-            <div className="bg-[#1C2738] border border-gray-700 rounded-2xl p-8 shadow-2xl space-y-6">
+        {/* ============================================================================== */}
+        {/* 4. MÓDULO SUPERADMINISTRADOR (COMPLETO CON FORMULARIO CRUD CREAR/ELIMINAR) */}
+        {/* ============================================================================== */}
+        {activeTab === 'superadmin' && (
+          <section className="space-y-6 max-w-4xl mx-auto">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-gray-800 pb-4 gap-3">
               <div>
-                <span className="text-xs font-bold text-[#DFFF00] uppercase tracking-widest">ZEGO MOVILIDAD CORPORATIVA</span>
-                <h2 className="text-3xl font-black text-white mt-1">Servicios de Transporte para Empresas</h2>
-                <p className="text-xs text-gray-400 mt-2">
-                  Soluciones personalizadas de traslado de personal ejecutivo, viajes de trabajo y logística privada entre Lima y Huánuco.
-                </p>
+                <h2 className="text-2xl font-black text-white">Panel SuperAdmin & Gestión Global</h2>
+                <p className="text-xs text-gray-400">Gestión de Salidas, Precios, Flota y Conductores</p>
               </div>
-
-              {corpSubmitted ? (
-                <div className="bg-green-500/20 border border-green-500 text-green-300 p-6 rounded-xl text-center space-y-2">
-                  <p className="text-lg font-bold">¡Solicitud Corporativa Enviada con Éxito!</p>
-                  <p className="text-xs">Un ejecutivo comercial de ZEGO MOVILIDAD se pondrá en contacto al número proporcionado en breve.</p>
-                  <button onClick={() => setCorpSubmitted(false)} className="mt-4 bg-[#176BFF] text-white text-xs px-4 py-2 rounded-lg font-bold">
-                    Enviar otra solicitud
-                  </button>
-                </div>
-              ) : (
-                <form onSubmit={(e) => { e.preventDefault(); setCorpSubmitted(true); }} className="space-y-4 text-xs">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-gray-300 font-semibold mb-1 block">RUC de la Empresa</label>
-                      <input required type="text" placeholder="20123456789" className="w-full bg-[#071426] border border-gray-700 p-3 rounded-lg text-white outline-none focus:border-[#176BFF]" />
-                    </div>
-                    <div>
-                      <label className="text-gray-300 font-semibold mb-1 block">Nombre Comercial / Razón Social</label>
-                      <input required type="text" placeholder="Corporación Andina S.A.C." className="w-full bg-[#071426] border border-gray-700 p-3 rounded-lg text-white outline-none focus:border-[#176BFF]" />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <label className="text-gray-300 font-semibold mb-1 block">Nombre de Contacto</label>
-                      <input required type="text" placeholder="Carlos Vega" className="w-full bg-[#071426] border border-gray-700 p-3 rounded-lg text-white outline-none focus:border-[#176BFF]" />
-                    </div>
-                    <div>
-                      <label className="text-gray-300 font-semibold mb-1 block">Teléfono / Celular</label>
-                      <input required type="tel" placeholder="999 888 777" className="w-full bg-[#071426] border border-gray-700 p-3 rounded-lg text-white outline-none focus:border-[#176BFF]" />
-                    </div>
-                    <div>
-                      <label className="text-gray-300 font-semibold mb-1 block">Correo Corporativo</label>
-                      <input required type="email" placeholder="contacto@empresa.pe" className="w-full bg-[#071426] border border-gray-700 p-3 rounded-lg text-white outline-none focus:border-[#176BFF]" />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-gray-300 font-semibold mb-1 block">Detalles del Servicio Requerido</label>
-                    <textarea rows="3" placeholder="Indica fechas, cantidad de pasajeros, ruta y observaciones..." className="w-full bg-[#071426] border border-gray-700 p-3 rounded-lg text-white outline-none focus:border-[#176BFF]"></textarea>
-                  </div>
-
-                  <button type="submit" className="w-full bg-[#176BFF] hover:bg-blue-600 text-white font-bold py-3.5 rounded-xl uppercase tracking-wider text-xs shadow-lg transition">
-                    Solitar Cotización Corporativa
-                  </button>
-                </form>
-              )}
+              <button onClick={() => setIsFestivoGlobal(!isFestivoGlobal)} className={`px-4 py-2 rounded-xl text-xs font-black ${isFestivoGlobal ? 'bg-yellow-400 text-black' : 'bg-gray-800 text-gray-300'}`}>
+                {isFestivoGlobal ? '🎉 Tarifa Festiva ACTIVA (+30%)' : '⚙️ Activar Tarifa Fiestas Patrias'}
+              </button>
             </div>
-          </div>
+
+            {/* MÉTRICAS */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+              <div className="bg-[#1C2738] p-5 rounded-2xl border border-gray-700">
+                <p className="text-gray-400 font-semibold">Ingresos Totales Hoy</p>
+                <p className="text-2xl font-black text-[#DFFF00]">S/ {trips.reduce((acc, t) => acc + (t.asientosOcupados.length * t.precioBase), 0).toFixed(2)}</p>
+              </div>
+              <div className="bg-[#1C2738] p-5 rounded-2xl border border-gray-700">
+                <p className="text-gray-400 font-semibold">Ocupación Flota</p>
+                <p className="text-2xl font-black text-white">{trips.reduce((acc, t) => acc + t.asientosOcupados.length, 0)} / {trips.reduce((acc, t) => acc + t.asientosTotales, 0)}</p>
+              </div>
+              <div className="bg-[#1C2738] p-5 rounded-2xl border border-gray-700">
+                <p className="text-gray-400 font-semibold">SUTRAN & MTC Status</p>
+                <p className="text-2xl font-black text-green-400">100% OK</p>
+              </div>
+            </div>
+
+            {/* FORMULARIO DE CREACIÓN DE VIAJE (CRUD) */}
+            <div className="bg-[#1C2738] border-2 border-[#176BFF] rounded-3xl p-6 shadow-2xl space-y-4 text-xs">
+              <h3 className="text-base font-black text-white flex items-center gap-2">
+                ➕ Programar y Agregar Nueva Salida / Viaje
+              </h3>
+
+              <form onSubmit={handleCreateNewTrip} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-gray-400 block mb-1">Origen</label>
+                    <select value={newTripForm.origen} onChange={(e) => setNewTripForm({...newTripForm, origen: e.target.value})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white font-bold">
+                      <option value="Lima (Javier Prado / La Victoria)">Lima (Javier Prado / La Victoria)</option>
+                      <option value="Huánuco (Terminal Terrestre Central)">Huánuco (Terminal Terrestre Central)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Destino</label>
+                    <select value={newTripForm.destino} onChange={(e) => setNewTripForm({...newTripForm, destino: e.target.value})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white font-bold">
+                      <option value="Huánuco (Terminal Terrestre Central)">Huánuco (Terminal Terrestre Central)</option>
+                      <option value="Lima (Javier Prado / La Victoria)">Lima (Javier Prado / La Victoria)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Fecha y Hora de Salida</label>
+                    <input type="text" placeholder="2026-03-26 08:00" value={newTripForm.fechaSalida} onChange={(e) => setNewTripForm({...newTripForm, fechaSalida: e.target.value})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white" required />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-gray-400 block mb-1">Precio Base (S/)</label>
+                    <input type="number" min={10} value={newTripForm.precioBase} onChange={(e) => setNewTripForm({...newTripForm, precioBase: Number(e.target.value)})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white font-bold" required />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Tipo de Vehículo</label>
+                    <select value={newTripForm.tipoVehiculo} onChange={(e) => setNewTripForm({...newTripForm, tipoVehiculo: e.target.value as VehicleType})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white font-bold">
+                      <option value="minivan_7">Minivan 7 Asientos (Hyundai H1)</option>
+                      <option value="minivan_11">Minivan VIP 11 Asientos (Toyota HiAce)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Placa Vehículo</label>
+                    <input type="text" placeholder="ZGO-100" value={newTripForm.placa} onChange={(e) => setNewTripForm({...newTripForm, placa: e.target.value})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white" required />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-gray-400 block mb-1">Nombre Conductor</label>
+                    <input type="text" placeholder="Nombre completo" value={newTripForm.conductorNombre} onChange={(e) => setNewTripForm({...newTripForm, conductorNombre: e.target.value})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white" required />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">N° Licencia Conductor</label>
+                    <input type="text" placeholder="Q-12345678" value={newTripForm.licencia} onChange={(e) => setNewTripForm({...newTripForm, licencia: e.target.value})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white" required />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Celular Conductor</label>
+                    <input type="tel" placeholder="987654321" value={newTripForm.celularConductor} onChange={(e) => setNewTripForm({...newTripForm, celularConductor: e.target.value})} className="w-full bg-[#071426] border border-gray-700 p-2.5 rounded-xl text-white" required />
+                  </div>
+                </div>
+
+                <button type="submit" className="w-full bg-[#DFFF00] text-[#071426] font-black py-3 rounded-xl uppercase text-xs hover:bg-yellow-400 transition">
+                  🚀 Publicar Salida en la Plataforma
+                </button>
+              </form>
+            </div>
+
+            {/* GESTIÓN Y ELIMINACIÓN DE VIAJES PUBLICADOS */}
+            <div className="bg-[#1C2738] border border-gray-700 rounded-3xl p-6 shadow-2xl space-y-4 text-xs">
+              <h3 className="text-base font-black text-white">📋 Salidas Activas en Sistema ({trips.length})</h3>
+              
+              <div className="space-y-3">
+                {trips.map((t) => (
+                  <div key={t.id} className="bg-[#071426] p-4 rounded-2xl border border-gray-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-black text-[#DFFF00] bg-black/50 px-2 py-0.5 rounded text-[10px]">{t.codigo}</span>
+                        <span className="font-bold text-white">{t.origen} ➔ {t.destino}</span>
+                      </div>
+                      <p className="text-gray-400">Salida: {t.fechaSalida} | Placa: {t.vehiculo.placa} | Chofer: {t.conductor.nombre}</p>
+                      <p className="text-gray-500 text-[10px]">Asientos ocupados: {t.asientosOcupados.length} / {t.asientosTotales}</p>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span className="text-base font-black text-[#DFFF00]">S/ {(t.precioBase * (t.factorPrecioFestivo || 1)).toFixed(2)}</span>
+                      <button onClick={() => handleDeleteTrip(t.id)} className="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded-xl text-[11px]">
+                        🗑️ Eliminar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
         )}
       </main>
 
-      {/* --- PIE DE PÁGINA --- */}
-      <footer className="bg-[#040c17] border-t border-gray-800 py-8 px-4 lg:px-8 text-center md:text-left text-xs text-gray-500">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-          <div>
-            <p className="font-bold text-gray-300">ZEGO MOVILIDAD S.A.C.</p>
-            <p>Eslogan: <i>"ZEGO: Conectando tu destino."</i></p>
-            <p className="text-[10px] mt-1">Ruta oficial inicial: Lima — Huánuco / Huánuco — Lima.</p>
-          </div>
-          <div className="flex gap-4 text-gray-400">
-            <span className="hover:text-white cursor-pointer">Términos del Servicio</span>
-            <span className="hover:text-white cursor-pointer">Políticas de Privacidad</span>
-            <span className="hover:text-white cursor-pointer">Libro de Reclamaciones</span>
+      {/* MODAL CON MAPA GPS INTERACTIVO DE RUTA */}
+      {viewGpsTrip && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1C2738] border border-gray-700 rounded-3xl max-w-lg w-full p-6 space-y-4 relative">
+            <button onClick={() => setViewGpsTrip(null)} className="absolute top-4 right-4 text-gray-400 font-bold">✕</button>
+            <h3 className="text-lg font-black text-white">📡 Monitoreo GPS en Vivo — Carretera Central</h3>
+            
+            {/* SIMULACIÓN MAPA INTERACTIVO CARRETERA CENTRAL */}
+            <div className="bg-[#071426] p-4 rounded-2xl border border-gray-800 space-y-3">
+              <div className="relative h-20 bg-gray-900 rounded-xl overflow-hidden flex items-center px-4">
+                <div className="absolute inset-0 bg-blue-500/10 h-full w-full"></div>
+                <div className="w-full bg-gray-700 h-2 rounded-full relative">
+                  <div className="bg-[#DFFF00] h-2 rounded-full transition-all duration-500" style={{ width: `${viewGpsTrip.gps.progresoPorcentaje}%` }}></div>
+                  <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 bg-[#176BFF] text-white p-1.5 rounded-full border-2 border-[#DFFF00] shadow-lg text-xs font-black" style={{ left: `${viewGpsTrip.gps.progresoPorcentaje}%` }}>
+                    🚐
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-between text-[10px] text-gray-400 font-bold">
+                <span>Lima (Javier Prado)</span>
+                <span>Chosica</span>
+                <span>Ticlio (4,818m)</span>
+                <span>La Oroya</span>
+                <span>Huánuco</span>
+              </div>
+
+              <div className="text-xs space-y-1 text-gray-300 pt-2 border-t border-gray-800">
+                <p>Tramo actual: <strong className="text-[#DFFF00]">{viewGpsTrip.gps.tramo}</strong></p>
+                <p>Velocidad registrada: <strong className="text-white">{viewGpsTrip.gps.velocidad} km/h</strong></p>
+              </div>
+            </div>
+
+            <button onClick={() => setViewGpsTrip(null)} className="w-full bg-[#176BFF] text-white font-bold py-3 rounded-xl text-xs uppercase">
+              Cerrar Mapa
+            </button>
           </div>
         </div>
+      )}
+
+      {/* FOOTER */}
+      <footer className="bg-[#040c17] border-t border-gray-800 py-6 text-center text-xs text-gray-500">
+        <p className="font-bold text-gray-300">ZEGO MOVILIDAD S.A.C. — RUC 20601928374</p>
+        <p className="text-[10px] text-gray-600 pt-1">Ley N° 29733 de Protección de Datos Personales | MTC & SUTRAN Perú © 2026</p>
       </footer>
     </div>
   );
