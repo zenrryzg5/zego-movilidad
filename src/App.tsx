@@ -151,23 +151,40 @@ export default function App() {
   };
 
   const handleConfirmSeats = async () => {
+    // 1. Validar que haya al menos un asiento seleccionado
     if (selectedSeats.length === 0) {
-      return alert('Por favor selecciona al menos un asiento');
+      return alert('Por favor selecciona al menos un asiento.');
     }
 
+    // 2. Si falta completar el nombre o teléfono, pedir datos antes de procesar
+    const nombrePasajero = formData?.nombre || prompt('Ingresa tu Nombre y Apellido:');
+    if (!nombrePasajero) return alert('El nombre es obligatorio para la reserva.');
+
+    const telefonoPasajero = formData?.telefono || prompt('Ingresa tu número de WhatsApp / Teléfono:');
+    if (!telefonoPasajero) return alert('El teléfono es obligatorio para enviar la confirmación.');
+
+    const dniPasajero = formData?.dni || prompt('Ingresa tu DNI (opcional):') || 'Sin DNI';
+
     try {
+      // 3. Registrar en Supabase y abrir WhatsApp
       await processBooking({
         tripId: selectedTrip?.id || 'TRP-101',
         seatNumber: selectedSeats.join(', '),
-        passengerName: 'Pasajero Zego',
-        passengerDni: '74839201',
-        passengerPhone: '987654321',
-        routeName: 'Lima ➔ Huánuco',
-        departureTime: selectedTrip?.fechaSalida || '2026-03-25 07:30',
+        passengerName: nombrePasajero,
+        passengerDni: dniPasajero,
+        passengerPhone: telefonoPasajero,
+        routeName: `${selectedTrip?.origen || 'Lima'} ➔ ${selectedTrip?.destino || 'Huánuco'}`,
+        departureTime: selectedTrip?.fechaSalida || '07:30 AM',
         price: (selectedTrip?.precio || 75) * selectedSeats.length
       });
+
+      // 4. Pasar al paso de confirmación/ticket
+      if (typeof setBookingStep === 'function') {
+        setBookingStep('ticket');
+      }
     } catch (error) {
       console.error('Error al procesar reserva:', error);
+      alert('Ocurrió un error al procesar la reserva. Inténtalo nuevamente.');
     }
   };
   return (
